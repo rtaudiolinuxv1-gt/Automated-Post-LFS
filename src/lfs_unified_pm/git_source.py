@@ -61,7 +61,7 @@ class GitSourceManager:
         if branch:
             command.extend(["--branch", branch])
         command.extend([repo_url, repo_dir])
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, capture_output=True, text=True)
 
     def _current_branch(self, repo_dir):
         return self._git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")

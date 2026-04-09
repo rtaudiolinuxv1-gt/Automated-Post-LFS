@@ -45,6 +45,7 @@ class PackageManagerApp:
         arch_json=(),
         arch_repos="",
         custom=(),
+        progress_callback=None,
     ):
         imported, _ = self.sync_with_report(
             base_catalog=base_catalog,
@@ -55,6 +56,7 @@ class PackageManagerApp:
             arch_repos=arch_repos,
             custom=custom,
             autodetect_sources=True,
+            progress_callback=progress_callback,
         )
         return imported
 
@@ -69,7 +71,9 @@ class PackageManagerApp:
         custom=(),
         selected_sources=None,
         autodetect_sources=True,
+        progress_callback=None,
     ):
+        _emit_progress(progress_callback, phase="start", message="Preparing sync")
         previous_by_source = {
             source: {item.name: item for item in self.store.list_packages_by_source(source)}
             for source in ("lfs-base", "blfs", "t2", "arch", "custom")
@@ -95,9 +99,11 @@ class PackageManagerApp:
             if "blfs" in selected_sources and not blfs_xml:
                 blfs_root = _find_existing_dir("blfs-git")
                 if blfs_root:
+                    _emit_progress(progress_callback, source="blfs", phase="source-tree", message="Using local BLFS tree")
                     blfs_xml = [blfs_root]
                 elif sync_settings.get("auto_fetch_missing", True):
                     blfs_repo_dir = os.path.join(self.config.source_trees_dir, "blfs-git")
+                    _emit_progress(progress_callback, source="blfs", phase="source-tree", message="Fetching BLFS source tree")
                     source_tree_report["blfs"] = manager.sync_repo(
                         blfs_repo_dir,
                         repo_url=sync_settings.get("blfs_git_url", DEFAULT_BLFS_GIT_URL),
@@ -105,6 +111,7 @@ class PackageManagerApp:
                     blfs_xml = [blfs_repo_dir]
             if "blfs" in selected_sources and not jhalfs_root and sync_settings.get("auto_fetch_missing", True):
                 jhalfs_repo_dir = os.path.join(self.config.source_trees_dir, "jhalfs")
+                _emit_progress(progress_callback, source="blfs", phase="source-tree", message="Fetching jhalfs helper tree")
                 source_tree_report["jhalfs"] = manager.sync_repo(
                     jhalfs_repo_dir,
                     repo_url=sync_settings.get("jhalfs_git_url", DEFAULT_JHALFS_GIT_URL),
@@ -113,38 +120,67 @@ class PackageManagerApp:
             if "t2" in selected_sources and not t2_tree:
                 t2_root = _find_existing_dir("t2sde", "package")
                 if t2_root:
+                    _emit_progress(progress_callback, source="t2", phase="source-tree", message="Using local T2 tree")
                     t2_tree = [t2_root]
                 elif sync_settings.get("auto_fetch_missing", True):
                     t2_repo_dir = os.path.join(self.config.source_trees_dir, "t2sde")
+                    _emit_progress(progress_callback, source="t2", phase="source-tree", message="Fetching T2 source tree")
                     source_tree_report["t2"] = manager.sync_repo(
                         t2_repo_dir,
                         repo_url=sync_settings.get("t2_git_url", DEFAULT_T2_GIT_URL),
                     )
                     t2_tree = [os.path.join(t2_repo_dir, "package")]
         if "base" in selected_sources:
+            _emit_progress(progress_callback, source="lfs-base", phase="load", message="Loading LFS base catalog")
             base_packages = BaseCatalogAdapter().load(base_catalog)
             for path in base_override:
                 base_packages = _merge_package_records(base_packages, BaseCatalogAdapter().load(path))
             imported.extend(base_packages)
+            _emit_progress(
+                progress_callback,
+                source="lfs-base",
+                phase="load",
+                message="Loaded LFS base catalog",
+                current=len(base_packages),
+                total=len(base_packages),
+            )
         if "blfs" in selected_sources:
             for path in blfs_xml:
+                _emit_progress(progress_callback, source="blfs", phase="load", message="Loading BLFS package metadata")
                 imported.extend(
                     BlfsXmlAdapter(
                         jhalfs_root=jhalfs_root,
                         work_dir=os.path.join(self.config.work_dir, "blfs"),
-                    ).load(path)
+                    ).load(path, progress_callback=progress_callback)
                 )
         if "t2" in selected_sources:
             for path in t2_tree:
-                imported.extend(T2PackageAdapter(blacklist_names=t2_blacklist, lfs_base_names=lfs_base_names).load(path))
+                _emit_progress(progress_callback, source="t2", phase="load", message="Loading T2 package metadata")
+                imported.extend(
+                    T2PackageAdapter(blacklist_names=t2_blacklist, lfs_base_names=lfs_base_names).load(
+                        path,
+                        progress_callback=progress_callback,
+                    )
+                )
         if "arch" in selected_sources:
             for path in arch_json:
+                _emit_progress(progress_callback, source="arch", phase="load", message="Loading Arch package metadata")
                 imported.extend(ArchJsonAdapter().load(path, arch_repos))
         if "custom" in selected_sources:
             for path in custom:
+                _emit_progress(progress_callback, source="custom", phase="load", message="Loading custom package metadata")
                 imported.extend(CustomRecipeAdapter().load(path))
-        for package in imported:
+        total_imported = len(imported)
+        for index, package in enumerate(imported, start=1):
             self.store.upsert_package(package)
+            if index == 1 or index % 250 == 0 or index == total_imported:
+                _emit_progress(
+                    progress_callback,
+                    phase="store",
+                    message="Saving package metadata",
+                    current=index,
+                    total=total_imported,
+                )
         t2_names = {package.name for package in imported if package.source_origin == "t2"}
         removed = self.store.delete_packages_by_source_except("t2", t2_names) if "t2" in selected_sources and t2_names else []
         report = _build_sync_report(previous_by_source, imported)
@@ -152,11 +188,19 @@ class PackageManagerApp:
         if source_tree_report:
             report["source_trees"] = source_tree_report
         self._record_syncs(report, selected_sources)
+        _emit_progress(
+            progress_callback,
+            phase="complete",
+            message="Sync complete",
+            current=total_imported,
+            total=total_imported,
+        )
         return imported, report
 
-    def sync_t2_git(self, repo_dir="", repo_url=DEFAULT_T2_GIT_URL, branch=""):
+    def sync_t2_git(self, repo_dir="", repo_url=DEFAULT_T2_GIT_URL, branch="", progress_callback=None):
         repo_dir = os.path.abspath(repo_dir or _find_existing_dir("t2sde") or os.path.join(os.getcwd(), "t2sde"))
         manager = GitSourceManager()
+        _emit_progress(progress_callback, source="t2", phase="source-tree", message="Refreshing T2 git tree")
         git_report = manager.sync_repo(repo_dir, repo_url=repo_url, branch=branch)
         imported, sync_report = self.sync_with_report(
             blfs_xml=[],
@@ -165,6 +209,7 @@ class PackageManagerApp:
             custom=[],
             selected_sources={"t2"},
             autodetect_sources=False,
+            progress_callback=progress_callback,
         )
         sync_report["git"] = git_report
         return imported, sync_report
@@ -310,8 +355,8 @@ class PackageManagerApp:
             return True, "Package metadata is older than %d days." % int(sync_settings.get("stale_days", 30))
         return False, ""
 
-    def sync_selected_sources(self, selected_sources):
-        return self.sync_with_report(selected_sources=set(selected_sources))
+    def sync_selected_sources(self, selected_sources, progress_callback=None):
+        return self.sync_with_report(selected_sources=set(selected_sources), progress_callback=progress_callback)
 
     def _record_syncs(self, report, selected_sources):
         mapping = {
@@ -372,6 +417,23 @@ def _load_name_list(path):
                 continue
             names.append(line)
     return names
+
+
+def _emit_progress(progress_callback, phase="", source="", message="", current=None, total=None):
+    if not progress_callback:
+        return
+    event = {
+        "phase": phase,
+        "source": source,
+        "message": message,
+    }
+    if current is not None:
+        event["current"] = int(current)
+    if total is not None:
+        event["total"] = int(total)
+        if total:
+            event["percent"] = int((float(current or 0) / float(total)) * 100)
+    progress_callback(event)
 
 
 def _candidate_source_roots(cwd="", app_file=""):

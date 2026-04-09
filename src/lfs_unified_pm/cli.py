@@ -81,15 +81,20 @@ def main(argv=None):
 
 def _dispatch(app, args):
     if args.command == "sync":
-        imported, report = app.sync_with_report(
-            base_catalog=args.base_catalog,
-            base_override=args.base_override,
-            blfs_xml=args.blfs_xml,
-            t2_tree=args.t2_tree,
-            arch_json=args.arch_json,
-            arch_repos=args.arch_repos,
-            custom=args.custom,
-        )
+        progress_callback = _make_cli_progress_callback()
+        try:
+            imported, report = app.sync_with_report(
+                base_catalog=args.base_catalog,
+                base_override=args.base_override,
+                blfs_xml=args.blfs_xml,
+                t2_tree=args.t2_tree,
+                arch_json=args.arch_json,
+                arch_repos=args.arch_repos,
+                custom=args.custom,
+                progress_callback=progress_callback,
+            )
+        finally:
+            _finish_cli_progress(progress_callback)
         by_source = {}
         for package in imported:
             by_source[package.source_origin] = by_source.get(package.source_origin, 0) + 1
@@ -102,11 +107,16 @@ def _dispatch(app, args):
         return 0
 
     if args.command == "sync-t2-git":
-        imported, report = app.sync_t2_git(
-            repo_dir=args.t2_git_dir,
-            repo_url=args.t2_git_url,
-            branch=args.t2_git_branch,
-        )
+        progress_callback = _make_cli_progress_callback()
+        try:
+            imported, report = app.sync_t2_git(
+                repo_dir=args.t2_git_dir,
+                repo_url=args.t2_git_url,
+                branch=args.t2_git_branch,
+                progress_callback=progress_callback,
+            )
+        finally:
+            _finish_cli_progress(progress_callback)
         git_report = report.get("git", {})
         print("Imported %d T2 package records" % len([item for item in imported if item.source_origin == "t2"]))
         print(
@@ -299,6 +309,47 @@ def _format_history_detail(detail):
     if payload.get("handling"):
         parts.append("handling=%s" % payload["handling"])
     return " ".join(parts) if parts else detail
+
+
+def _make_cli_progress_callback(stream=None):
+    stream = stream or sys.stderr
+    state = {"last_line": "", "width": 0}
+
+    def callback(event):
+        line = _format_progress_event(event)
+        if not line or line == state["last_line"]:
+            return
+        state["last_line"] = line
+        state["width"] = max(state["width"], len(line))
+        stream.write("\r" + line.ljust(state["width"]))
+        stream.flush()
+
+    callback._progress_state = state
+    callback._progress_stream = stream
+    return callback
+
+
+def _finish_cli_progress(callback):
+    if not callback:
+        return
+    state = getattr(callback, "_progress_state", {})
+    stream = getattr(callback, "_progress_stream", sys.stderr)
+    if state.get("last_line"):
+        stream.write("\r" + (" " * state.get("width", len(state["last_line"]))) + "\r")
+        stream.flush()
+
+
+def _format_progress_event(event):
+    source = event.get("source", "") or "sync"
+    message = event.get("message", "") or event.get("phase", "working")
+    current = event.get("current")
+    total = event.get("total")
+    if total:
+        percent = event.get("percent", int((float(current or 0) / float(total)) * 100))
+        return "[%s] %s %d/%d (%d%%)" % (source, message, int(current or 0), int(total), percent)
+    if current is not None:
+        return "[%s] %s %d" % (source, message, int(current))
+    return "[%s] %s" % (source, message)
 
 
 if __name__ == "__main__":

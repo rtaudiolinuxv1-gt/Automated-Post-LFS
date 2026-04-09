@@ -21,19 +21,26 @@ class BlfsXmlAdapter:
         self.revision = revision
         self.work_dir = os.path.abspath(work_dir) if work_dir else ""
 
-    def load(self, path):
+    def load(self, path, progress_callback=None):
         if os.path.isdir(path):
-            packages = self._load_generated_bundle(path)
+            _emit_progress(progress_callback, "Preparing BLFS bundle")
+            packages = self._load_generated_bundle(path, progress_callback=progress_callback)
             if packages:
+                _emit_progress(progress_callback, "Loaded BLFS package bundle", current=len(packages), total=len(packages))
                 return packages
         xml_files, entity_map, root_dir = self._discover_files_and_entities(path)
         packages = []
-        for xml_path in sorted(xml_files):
+        total_xml = len(xml_files)
+        _emit_progress(progress_callback, "Parsing BLFS XML files", current=0, total=total_xml)
+        for index, xml_path in enumerate(sorted(xml_files), start=1):
             package = self._parse_file(xml_path, entity_map, root_dir)
             if package:
                 packages.append(package)
-        graph = self._load_jhalfs_graph(path)
+            if index == 1 or index % 25 == 0 or index == total_xml:
+                _emit_progress(progress_callback, "Parsing BLFS XML files", current=index, total=total_xml)
+        graph = self._load_jhalfs_graph(path, progress_callback=progress_callback)
         if graph:
+            _emit_progress(progress_callback, "Applying jhalfs dependency graph", current=len(graph), total=len(graph))
             packages = self._merge_with_jhalfs_graph(packages, graph)
         return packages
 
@@ -176,17 +183,18 @@ class BlfsXmlAdapter:
             urls.append(url)
         return urls
 
-    def _load_jhalfs_graph(self, path):
+    def _load_jhalfs_graph(self, path, progress_callback=None):
         if not self.jhalfs_root or not os.path.isdir(path):
             return {}
         if not shutil.which("xsltproc") or not shutil.which("xmllint"):
             return {}
         try:
+            _emit_progress(progress_callback, "Generating jhalfs dependency graph")
             return _generate_jhalfs_dependency_graph(path, self.jhalfs_root, self.revision)
         except Exception:
             return {}
 
-    def _load_generated_bundle(self, path):
+    def _load_generated_bundle(self, path, progress_callback=None):
         if not self.jhalfs_root or not os.path.isdir(path):
             return []
         if not shutil.which("xsltproc") or not shutil.which("xmllint") or not shutil.which("make"):
@@ -197,10 +205,16 @@ class BlfsXmlAdapter:
                 self.jhalfs_root,
                 self.revision,
                 self.work_dir,
+                progress_callback=progress_callback,
             )
         except Exception:
             return []
-        return _load_packages_from_generated_files(full_xml, packages_xml, self.source_origin)
+        return _load_packages_from_generated_files(
+            full_xml,
+            packages_xml,
+            self.source_origin,
+            progress_callback=progress_callback,
+        )
 
     def _merge_with_jhalfs_graph(self, packages, graph):
         merged = []
@@ -335,7 +349,7 @@ def _dep_build(attrs):
     return "before"
 
 
-def _prepare_jhalfs_bundle(blfs_root, jhalfs_root, revision, work_dir):
+def _prepare_jhalfs_bundle(blfs_root, jhalfs_root, revision, work_dir, progress_callback=None):
     bundle_dir = _bundle_dir(blfs_root, revision, work_dir)
     os.makedirs(bundle_dir, exist_ok=True)
     full_xml = os.path.join(bundle_dir, _blfs_full_name(revision))
@@ -348,9 +362,12 @@ def _prepare_jhalfs_bundle(blfs_root, jhalfs_root, revision, work_dir):
         or not os.path.isfile(full_xml)
         or not os.path.isfile(packages_xml)
     ):
-        _render_bundle(blfs_root, jhalfs_root, revision, bundle_dir)
+        _emit_progress(progress_callback, "Rendering BLFS bundle")
+        _render_bundle(blfs_root, jhalfs_root, revision, bundle_dir, progress_callback=progress_callback)
         with open(metadata_path, "w", encoding="utf-8") as handle:
             json.dump({"source_stamp": source_stamp, "revision": revision}, handle)
+    else:
+        _emit_progress(progress_callback, "Using cached BLFS bundle")
     return full_xml, packages_xml
 
 
@@ -391,7 +408,8 @@ def _bundle_source_stamp(blfs_root, jhalfs_root):
     return "%s:%s" % (latest, os.path.abspath(blfs_root))
 
 
-def _render_bundle(blfs_root, jhalfs_root, revision, bundle_dir):
+def _render_bundle(blfs_root, jhalfs_root, revision, bundle_dir, progress_callback=None):
+    _emit_progress(progress_callback, "Running BLFS validate")
     _run(
         ["make", "-C", blfs_root, "validate", "REV=%s" % revision, "RENDERTMP=%s" % bundle_dir],
     )
@@ -405,8 +423,10 @@ def _render_bundle(blfs_root, jhalfs_root, revision, bundle_dir):
         handle.write("<?xml version=\"1.0\"?>\n<book/>\n")
     with open(instpkg, "w", encoding="utf-8") as handle:
         handle.write("<?xml version=\"1.0\"?>\n<sublist><name>Installed</name></sublist>\n")
+    _emit_progress(progress_callback, "Generating BLFS special cases")
     _run(["bash", os.path.join(jhalfs_root, "gen-special.sh"), full_xml, special_cases, blfs_root])
     shutil.copyfile(os.path.join(jhalfs_root, "packdesc.dtd"), packdesc)
+    _emit_progress(progress_callback, "Generating BLFS package list")
     _run(
         [
             "xsltproc",
@@ -435,13 +455,17 @@ def _run(command):
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _load_packages_from_generated_files(full_xml_path, packages_xml_path, source_origin):
+def _load_packages_from_generated_files(full_xml_path, packages_xml_path, source_origin, progress_callback=None):
     package_graph = _parse_packages_xml(packages_xml_path)
     if not package_graph:
         return []
+    _emit_progress(progress_callback, "Indexing BLFS sections")
     section_map = _index_sections(full_xml_path)
     packages = []
-    for name in sorted(package_graph):
+    ordered_names = sorted(package_graph)
+    total = len(ordered_names)
+    _emit_progress(progress_callback, "Loading BLFS packages", current=0, total=total)
+    for index, name in enumerate(ordered_names, start=1):
         details = package_graph[name]
         section = section_map.get(name)
         commands = _extract_section_commands(section)
@@ -475,7 +499,26 @@ def _load_packages_from_generated_files(full_xml_path, packages_xml_path, source
                 metadata=metadata,
             )
         )
+        if index == 1 or index % 25 == 0 or index == total:
+            _emit_progress(progress_callback, "Loading BLFS packages", current=index, total=total)
     return packages
+
+
+def _emit_progress(progress_callback, message, current=None, total=None):
+    if not progress_callback:
+        return
+    event = {
+        "source": "blfs",
+        "phase": "load",
+        "message": message,
+    }
+    if current is not None:
+        event["current"] = int(current)
+    if total is not None:
+        event["total"] = int(total)
+        if total:
+            event["percent"] = int((float(current or 0) / float(total)) * 100)
+    progress_callback(event)
 
 
 def _parse_packages_xml(path):

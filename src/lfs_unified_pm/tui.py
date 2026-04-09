@@ -251,7 +251,7 @@ def _sync_menu(screen, app):
                     try:
                         sync["default_sources"] = list(selected)
                         app.update_settings({"sync": sync})
-                        _, report = app.sync_selected_sources(selected)
+                        _, report = _run_sync_with_progress(screen, app, selected)
                         return _sync_summary(report, selected)
                     except Exception as error:
                         message = "Sync failed: %s" % error
@@ -1369,6 +1369,53 @@ def _sync_summary(report, selected):
             )
         )
     return "Synced: " + ", ".join(parts)
+
+
+def _run_sync_with_progress(screen, app, selected):
+    progress = {
+        "phase": "start",
+        "source": "",
+        "message": "Starting sync",
+        "tick": 0,
+    }
+
+    def callback(event):
+        progress.update(event)
+        progress["tick"] = progress.get("tick", 0) + 1
+        _draw_sync_progress(screen, selected, progress)
+
+    _draw_sync_progress(screen, selected, progress)
+    return app.sync_selected_sources(selected, progress_callback=callback)
+
+
+def _draw_sync_progress(screen, selected, progress):
+    _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+    title = "Syncing Package Databases"
+    selected_line = "Sources: %s" % (", ".join(_source_name(key) for key in sorted(selected)) or "none")
+    source = progress.get("source", "") or "sync"
+    message = progress.get("message", "") or progress.get("phase", "working")
+    current = progress.get("current")
+    total = progress.get("total")
+    percent = progress.get("percent")
+    screen.addnstr(start_y + 0, start_x, title, content_width - 1, _attr("title"))
+    screen.addnstr(start_y + 1, start_x, selected_line, content_width - 1, _attr("normal"))
+    screen.addnstr(start_y + 3, start_x, "Current source: %s" % source, content_width - 1, _attr("accent"))
+    screen.addnstr(start_y + 4, start_x, message, content_width - 1, _attr("normal"))
+    bar_width = max(10, min(50, content_width - 4))
+    if total:
+        filled = int((float(current or 0) / float(total)) * bar_width)
+        bar = "[" + ("#" * filled).ljust(bar_width) + "]"
+        detail = "%d/%d (%d%%)" % (int(current or 0), int(total), int(percent or 0))
+    else:
+        tick = progress.get("tick", 0)
+        marker = tick % bar_width
+        chars = [" "] * bar_width
+        chars[marker] = ">"
+        bar = "[" + "".join(chars) + "]"
+        detail = "working"
+    screen.addnstr(start_y + 6, start_x, bar, content_width - 1, _attr("selected"))
+    screen.addnstr(start_y + 7, start_x, detail, content_width - 1, _attr("normal"))
+    screen.refresh()
 
 
 def _clone_phases(phases):

@@ -147,6 +147,24 @@ class SyncAndScanTests(unittest.TestCase):
             override_path,
         )
 
+    def test_sync_progress_callback_receives_events(self):
+        events = []
+        app = PackageManagerApp(self.tempdir)
+        try:
+            imported, _ = app.sync_with_report(
+                selected_sources={"base"},
+                autodetect_sources=False,
+                progress_callback=events.append,
+            )
+            self.assertTrue(imported)
+            self.assertTrue(events)
+            self.assertEqual(events[0]["phase"], "start")
+            self.assertTrue(any(event.get("source") == "lfs-base" for event in events))
+            self.assertTrue(any(event.get("phase") == "store" for event in events))
+            self.assertEqual(events[-1]["phase"], "complete")
+        finally:
+            app.close()
+
 
 if __name__ == "__main__":
     unittest.main()

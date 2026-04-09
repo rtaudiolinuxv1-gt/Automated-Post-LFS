@@ -14,17 +14,26 @@ class T2PackageAdapter:
         self.blacklist_names = set(blacklist_names or ())
         self.lfs_base_names = set(lfs_base_names or ())
 
-    def load(self, path):
+    def load(self, path, progress_callback=None):
         packages = []
+        desc_paths = []
         for root, _, files in os.walk(path):
             for name in files:
                 if name.endswith(".desc"):
-                    full = os.path.join(root, name)
-                    if self._is_blacklisted(full, path):
-                        continue
-                    record = self._parse_package(full, path)
-                    if record:
-                        packages.append(record)
+                    desc_paths.append(os.path.join(root, name))
+        desc_paths.sort()
+        total = len(desc_paths)
+        _emit_progress(progress_callback, "Scanning T2 package tree", current=0, total=total)
+        for index, full in enumerate(desc_paths, start=1):
+            if self._is_blacklisted(full, path):
+                if index == 1 or index % 50 == 0 or index == total:
+                    _emit_progress(progress_callback, "Scanning T2 package tree", current=index, total=total)
+                continue
+            record = self._parse_package(full, path)
+            if record:
+                packages.append(record)
+            if index == 1 or index % 50 == 0 or index == total:
+                _emit_progress(progress_callback, "Scanning T2 package tree", current=index, total=total)
         return packages
 
     def _is_blacklisted(self, desc_path, tree_root):
@@ -166,3 +175,20 @@ class T2PackageAdapter:
             return []
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
             return [line.rstrip("\n") for line in handle]
+
+
+def _emit_progress(progress_callback, message, current=None, total=None):
+    if not progress_callback:
+        return
+    event = {
+        "source": "t2",
+        "phase": "load",
+        "message": message,
+    }
+    if current is not None:
+        event["current"] = int(current)
+    if total is not None:
+        event["total"] = int(total)
+        if total:
+            event["percent"] = int((float(current or 0) / float(total)) * 100)
+    progress_callback(event)
