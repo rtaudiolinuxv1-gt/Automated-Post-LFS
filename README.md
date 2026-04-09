@@ -1,4 +1,4 @@
-# LFS Unified Package Manager
+LFS Unified Package Manager
 
 Created by RTAudioLinux
 
