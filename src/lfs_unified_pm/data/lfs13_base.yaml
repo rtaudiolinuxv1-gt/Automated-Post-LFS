@@ -1,0 +1,256 @@
+packages:
+  - name: bash
+    version: 5.3.3
+    summary: GNU Bourne Again Shell
+    category: base
+    depends: [ncurses, readline]
+    provides: [sh]
+  - name: binutils
+    version: 2.45
+    summary: GNU assembler and linker tools
+    category: toolchain
+    depends: [zlib, zstd]
+  - name: bison
+    version: 3.8.2
+    summary: Parser generator
+    category: development
+    depends: [m4]
+  - name: bzip2
+    version: 1.0.8
+    summary: Compression library and tools
+    category: base
+  - name: coreutils
+    version: 9.8
+    summary: Essential file and text utilities
+    category: base
+    depends: [acl, attr, gmp]
+  - name: diffutils
+    version: 3.12
+    summary: File comparison tools
+    category: base
+  - name: e2fsprogs
+    version: 1.47.3
+    summary: ext filesystem utilities
+    category: base
+    depends: [util-linux]
+  - name: expat
+    version: 2.7.3
+    summary: XML parser library
+    category: base
+  - name: file
+    version: 5.46
+    summary: File type identification utility
+    category: base
+    depends: [zlib]
+  - name: findutils
+    version: 4.10.0
+    summary: File search utilities
+    category: base
+  - name: flex
+    version: 2.6.4
+    summary: Lexical analyzer generator
+    category: development
+    depends: [m4]
+  - name: gawk
+    version: 5.3.2
+    summary: Pattern scanning and processing language
+    category: base
+    depends: [mpfr]
+  - name: gcc
+    version: 15.2.0
+    summary: GNU compiler collection
+    category: toolchain
+    depends: [binutils, gmp, isl, mpc, mpfr, zstd]
+    provides: [cc, cxx]
+  - name: gettext
+    version: 0.26
+    summary: Native language support tools
+    category: base
+    depends: [libunistring]
+  - name: glibc
+    version: 2.42
+    summary: GNU C library
+    category: toolchain
+    depends: [linux-api-headers]
+    provides: [libc]
+  - name: gmp
+    version: 6.3.0
+    summary: GNU multiple precision arithmetic library
+    category: libraries
+  - name: gperf
+    version: 3.3
+    summary: Perfect hash generator
+    category: development
+  - name: grep
+    version: 3.12
+    summary: Pattern matching utilities
+    category: base
+    depends: [pcre2]
+  - name: gzip
+    version: 1.14
+    summary: GNU compression utility
+    category: base
+  - name: iana-etc
+    version: 20251030
+    summary: Network protocol and service names
+    category: base
+  - name: inetutils
+    version: 2.6
+    summary: Basic networking programs
+    category: base
+  - name: intltool
+    version: 0.51.0
+    summary: Translation helper scripts
+    category: development
+  - name: isl
+    version: 0.27
+    summary: Integer set library
+    category: libraries
+    depends: [gmp]
+  - name: kbd
+    version: 2.8.0
+    summary: Keyboard and console tools
+    category: base
+  - name: libcap
+    version: 2.76
+    summary: POSIX capability library
+    category: libraries
+  - name: libffi
+    version: 3.5.2
+    summary: Foreign function interface library
+    category: libraries
+  - name: libpipeline
+    version: 1.5.8
+    summary: Pipeline manipulation library
+    category: libraries
+  - name: libtool
+    version: 2.5.4
+    summary: Generic library support script
+    category: development
+  - name: libxcrypt
+    version: 4.4.38
+    summary: Password hashing library
+    category: libraries
+  - name: linux-api-headers
+    version: 6.18.10
+    summary: Sanitized Linux kernel headers
+    category: toolchain
+  - name: m4
+    version: 1.4.20
+    summary: Macro processor
+    category: base
+  - name: make
+    version: 4.4.1
+    summary: Build orchestration utility
+    category: development
+  - name: man-db
+    version: 2.13.1
+    summary: Manual page database tools
+    category: base
+    depends: [gdbm, groff, less, libpipeline]
+  - name: meson
+    version: 1.9.1
+    summary: Meson build system
+    category: development
+    depends: [ninja, python]
+  - name: mpc
+    version: 1.3.1
+    summary: Complex arithmetic library
+    category: libraries
+    depends: [gmp, mpfr]
+  - name: mpfr
+    version: 4.2.2
+    summary: Floating point arithmetic library
+    category: libraries
+    depends: [gmp]
+  - name: ncurses
+    version: 6.5
+    summary: Terminal handling library
+    category: libraries
+  - name: ninja
+    version: 1.13.1
+    summary: Small fast build system
+    category: development
+  - name: openssl
+    version: 3.6.0
+    summary: TLS and cryptography toolkit
+    category: libraries
+    depends: [zlib]
+  - name: patch
+    version: 2.8
+    summary: Patch application tool
+    category: base
+  - name: pcre2
+    version: 10.46
+    summary: Perl compatible regular expression library
+    category: libraries
+  - name: perl
+    version: 5.42.0
+    summary: Practical extraction and report language
+    category: base
+    depends: [gdbm]
+  - name: pkgconf
+    version: 2.5.1
+    summary: pkg-config compatible dependency helper
+    category: development
+    provides: [pkg-config]
+  - name: python
+    version: 3.14.0
+    summary: Python interpreter
+    category: base
+    depends: [bzip2, expat, libffi, openssl, sqlite, xz, zlib]
+  - name: readline
+    version: 8.3
+    summary: Line editing library
+    category: libraries
+    depends: [ncurses]
+  - name: sed
+    version: 4.9
+    summary: Stream editor
+    category: base
+  - name: shadow
+    version: 4.18.0
+    summary: User account management tools
+    category: base
+    depends: [libxcrypt]
+  - name: sqlite
+    version: 3.50.4
+    summary: Embedded SQL database engine
+    category: libraries
+  - name: systemd
+    version: 258.1
+    summary: System and service manager
+    category: base
+    depends: [acl, kmod, libcap, openssl, util-linux, zlib]
+  - name: tar
+    version: 1.35
+    summary: Tar archive utility
+    category: base
+    depends: [acl, attr]
+  - name: texinfo
+    version: 7.2
+    summary: GNU documentation system
+    category: development
+  - name: util-linux
+    version: 2.42.1
+    summary: Essential system utilities
+    category: base
+    depends: [libcap, ncurses, systemd]
+  - name: vim
+    version: 9.1.1726
+    summary: Vi-compatible editor
+    category: base
+    depends: [gawk, gettext, perl]
+  - name: xz
+    version: 5.8.1
+    summary: XZ compression tools and library
+    category: base
+  - name: zlib
+    version: 1.3.1
+    summary: DEFLATE compression library
+    category: libraries
+  - name: zstd
+    version: 1.5.7
+    summary: Zstandard compression library
+    category: libraries
+

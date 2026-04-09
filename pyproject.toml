@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lfs-unified-pm"
+version = "0.1.0"
+description = "Unified source package manager for LFS/BLFS/T2/Arch workflows"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+  { name = "RTAudioLinux" }
+]
+
+[project.scripts]
+lfs-pm = "lfs_unified_pm.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lfs_unified_pm = ["data/*.yaml"]

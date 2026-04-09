@@ -1,0 +1,4 @@
+# Always ignored T2 package records
+00-dirtree
+99-final
+sysfiles

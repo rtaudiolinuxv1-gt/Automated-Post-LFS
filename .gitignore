@@ -1,0 +1,27 @@
+# Local app state and caches
+.lfs-pm/
+
+# Generated output
+generated-build-scripts/
+
+# Mounted or local target roots
+filesystem_mountpoint/
+
+# External source trees used for local syncing/imports
+blfs-git/
+jhalfs/
+t2sde/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Common local test/cache noise
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/

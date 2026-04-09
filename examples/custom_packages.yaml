@@ -1,0 +1,14 @@
+packages:
+  - name: hello-local
+    version: 1.0
+    source_origin: custom
+    summary: Example local package recipe
+    category: custom
+    build_system: shell
+    depends: [bash, coreutils]
+    phases:
+      build:
+        - mkdir -p "$DESTDIR/usr/bin"
+        - printf '#!/bin/bash\necho hello-local\n' > "$DESTDIR/usr/bin/hello-local"
+        - chmod 0755 "$DESTDIR/usr/bin/hello-local"
+
