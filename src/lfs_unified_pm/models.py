@@ -79,6 +79,7 @@ class AppConfig:
     work_dir: str
     dist_dir: str
     custom_builds_dir: str
+    source_trees_dir: str
     source_priority: List[str]
     default_build_mode: str = "native"
     jhalfs_instpkg: str = "/var/lib/jhalfs/BLFS/instpkg.xml"

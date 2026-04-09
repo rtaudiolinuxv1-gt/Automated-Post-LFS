@@ -97,6 +97,7 @@ def _dispatch(app, args):
         print("Imported %d package records" % len(imported))
         if detail:
             print(detail)
+        _print_source_tree_report(report.get("source_trees", {}))
         _print_change_report(report)
         return 0
 
@@ -270,6 +271,15 @@ def _print_change_report(report):
     for source in sorted(removed):
         if removed[source]:
             print("%s: removed=%d" % (source, len(removed[source])))
+
+
+def _print_source_tree_report(report):
+    for source in sorted(report):
+        details = report[source]
+        action = "cloned" if details.get("created") else "updated"
+        print("%s source tree %s: %s" % (source, action, details.get("repo_dir", "")))
+        if details.get("warning"):
+            print("%s source warning: %s" % (source, details["warning"]))
 
 
 def _format_history_detail(detail):

@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from lfs_unified_pm import app as app_module
 from lfs_unified_pm.app import PackageManagerApp
 
 
@@ -53,6 +54,35 @@ class GitSourceTests(unittest.TestCase):
             self.assertEqual(report["t2"]["version_changed"], ["demo"])
             self.assertTrue(report["git"]["previous_head"])
             self.assertTrue(report["git"]["current_head"])
+        finally:
+            app.close()
+
+    def test_sync_auto_fetches_missing_t2_tree(self):
+        app = PackageManagerApp(self.root)
+        try:
+            app.update_settings(
+                {
+                    "sync": {
+                        "default_sources": ["t2"],
+                        "auto_fetch_missing": True,
+                        "t2_git_url": self.source_repo,
+                    }
+                }
+            )
+            original_find_existing_dir = app_module._find_existing_dir
+            try:
+                app_module._find_existing_dir = lambda *parts, **kwargs: ""
+                imported, report = app.sync_with_report(
+                    selected_sources={"t2"},
+                    autodetect_sources=True,
+                )
+            finally:
+                app_module._find_existing_dir = original_find_existing_dir
+            self.assertEqual(len([item for item in imported if item.source_origin == "t2"]), 1)
+            self.assertIn("t2", report.get("source_trees", {}))
+            self.assertTrue(
+                os.path.isdir(os.path.join(app.config.source_trees_dir, "t2sde", ".git"))
+            )
         finally:
             app.close()
 

@@ -181,6 +181,10 @@ def _sync_menu(screen, app):
     rows = [
         ("prompt_if_stale", "Prompt If Stale", "bool"),
         ("stale_days", "Stale Days", "int"),
+        ("auto_fetch_missing", "Auto Fetch Missing Trees", "bool"),
+        ("blfs_git_url", "BLFS Git URL", "str"),
+        ("jhalfs_git_url", "jhalfs Git URL", "str"),
+        ("t2_git_url", "T2 Git URL", "str"),
     ] + [("source:%s" % key, "Sync %s" % label, "bool") for key, label in SOURCE_LABELS] + [
         ("run_sync", "Run Sync Now", "action"),
     ]
@@ -234,6 +238,12 @@ def _sync_menu(screen, app):
             elif kind == "int":
                 sync[field] = int(_prompt(screen, label, str(sync.get(field, 0))) or sync.get(field, 0))
                 message = "Updated %s" % label
+            elif kind == "str":
+                current = str(sync.get(field, "") or "")
+                value = _prompt(screen, label, current)
+                if value is not None:
+                    sync[field] = value.strip()
+                    message = "Updated %s" % label
             elif kind == "action":
                 if not selected:
                     message = "No sources selected"

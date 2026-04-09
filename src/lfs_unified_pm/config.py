@@ -11,12 +11,14 @@ def default_config(root):
     state_dir, cache_dir = _resolve_state_paths(root)
     dist_dir = os.path.join(cache_dir, "packages")
     custom_builds_dir = os.path.join(state_dir, "custom-builds")
+    source_trees_dir = os.path.join(state_dir, "sources")
     return AppConfig(
         root=root,
         db_path=os.path.join(state_dir, "state.db"),
         work_dir=os.path.join(cache_dir, "work"),
         dist_dir=dist_dir,
         custom_builds_dir=custom_builds_dir,
+        source_trees_dir=source_trees_dir,
         source_priority=list(SOURCE_PRIORITY),
     )
 
@@ -27,6 +29,7 @@ def ensure_directories(config):
         config.work_dir,
         config.dist_dir,
         config.custom_builds_dir,
+        config.source_trees_dir,
     ):
         os.makedirs(path, exist_ok=True)
     jhalfs_dir = os.path.join(config.root, "var", "lib", "jhalfs", "BLFS")

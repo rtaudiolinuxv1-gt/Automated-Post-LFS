@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from .git_source import DEFAULT_BLFS_GIT_URL, DEFAULT_JHALFS_GIT_URL, DEFAULT_T2_GIT_URL
+
 
 DEFAULT_SETTINGS = {
     "build": {
@@ -54,7 +56,11 @@ DEFAULT_SETTINGS = {
     "sync": {
         "prompt_if_stale": True,
         "stale_days": 30,
+        "auto_fetch_missing": True,
         "default_sources": ["base", "blfs", "t2"],
+        "blfs_git_url": DEFAULT_BLFS_GIT_URL,
+        "jhalfs_git_url": DEFAULT_JHALFS_GIT_URL,
+        "t2_git_url": DEFAULT_T2_GIT_URL,
     },
     "system_state": {
         "assume_lfs_base_installed": False,

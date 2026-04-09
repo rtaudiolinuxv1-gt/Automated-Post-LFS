@@ -13,7 +13,12 @@ from .adapters import (
 from .catalog import PackageCatalog
 from .config import default_config, ensure_directories
 from .custom_builds import load_custom_build, save_custom_build
-from .git_source import DEFAULT_T2_GIT_URL, GitSourceManager
+from .git_source import (
+    DEFAULT_BLFS_GIT_URL,
+    DEFAULT_JHALFS_GIT_URL,
+    DEFAULT_T2_GIT_URL,
+    GitSourceManager,
+)
 from .jhalfs import read_instpkg_xml
 from .scanner import RootScanner
 from .settings import deep_merge, merged_override, merged_settings
@@ -70,6 +75,7 @@ class PackageManagerApp:
             for source in ("lfs-base", "blfs", "t2", "arch", "custom")
         }
         imported = []
+        selected_sources = set(selected_sources or ("base", "blfs", "t2", "arch", "custom"))
         if not base_catalog:
             base_catalog = os.path.join(
                 os.path.dirname(__file__), "data", "lfs13_base.yaml"
@@ -77,18 +83,44 @@ class PackageManagerApp:
         t2_blacklist_path = os.path.join(os.path.dirname(__file__), "data", "t2_blacklist.txt")
         t2_blacklist = _load_name_list(t2_blacklist_path)
         lfs_base_names = {package.name for package in BaseCatalogAdapter().load(base_catalog)}
+        sync_settings = self.get_settings().get("sync", {})
         if not base_override:
-            local_override = os.path.join(os.getcwd(), "root-overrides.yaml")
-            if os.path.isfile(local_override):
+            local_override = _find_existing_file("root-overrides.yaml")
+            if local_override:
                 base_override = [local_override]
-        if autodetect_sources and not blfs_xml and os.path.isdir(os.path.join(os.getcwd(), "blfs-git")):
-            blfs_xml = [os.path.join(os.getcwd(), "blfs-git")]
-        jhalfs_root = ""
-        if os.path.isdir(os.path.join(os.getcwd(), "jhalfs", "BLFS")):
-            jhalfs_root = os.path.join(os.getcwd(), "jhalfs", "BLFS")
-        if autodetect_sources and not t2_tree and os.path.isdir(os.path.join(os.getcwd(), "t2sde")):
-            t2_tree = [os.path.join(os.getcwd(), "t2sde", "package")]
-        selected_sources = set(selected_sources or ("base", "blfs", "t2", "arch", "custom"))
+        jhalfs_root = _find_existing_dir("jhalfs", "BLFS")
+        source_tree_report = {}
+        if autodetect_sources:
+            manager = GitSourceManager()
+            if "blfs" in selected_sources and not blfs_xml:
+                blfs_root = _find_existing_dir("blfs-git")
+                if blfs_root:
+                    blfs_xml = [blfs_root]
+                elif sync_settings.get("auto_fetch_missing", True):
+                    blfs_repo_dir = os.path.join(self.config.source_trees_dir, "blfs-git")
+                    source_tree_report["blfs"] = manager.sync_repo(
+                        blfs_repo_dir,
+                        repo_url=sync_settings.get("blfs_git_url", DEFAULT_BLFS_GIT_URL),
+                    )
+                    blfs_xml = [blfs_repo_dir]
+            if "blfs" in selected_sources and not jhalfs_root and sync_settings.get("auto_fetch_missing", True):
+                jhalfs_repo_dir = os.path.join(self.config.source_trees_dir, "jhalfs")
+                source_tree_report["jhalfs"] = manager.sync_repo(
+                    jhalfs_repo_dir,
+                    repo_url=sync_settings.get("jhalfs_git_url", DEFAULT_JHALFS_GIT_URL),
+                )
+                jhalfs_root = os.path.join(jhalfs_repo_dir, "BLFS")
+            if "t2" in selected_sources and not t2_tree:
+                t2_root = _find_existing_dir("t2sde", "package")
+                if t2_root:
+                    t2_tree = [t2_root]
+                elif sync_settings.get("auto_fetch_missing", True):
+                    t2_repo_dir = os.path.join(self.config.source_trees_dir, "t2sde")
+                    source_tree_report["t2"] = manager.sync_repo(
+                        t2_repo_dir,
+                        repo_url=sync_settings.get("t2_git_url", DEFAULT_T2_GIT_URL),
+                    )
+                    t2_tree = [os.path.join(t2_repo_dir, "package")]
         if "base" in selected_sources:
             base_packages = BaseCatalogAdapter().load(base_catalog)
             for path in base_override:
@@ -117,11 +149,13 @@ class PackageManagerApp:
         removed = self.store.delete_packages_by_source_except("t2", t2_names) if "t2" in selected_sources and t2_names else []
         report = _build_sync_report(previous_by_source, imported)
         report["removed"] = {"t2": removed}
+        if source_tree_report:
+            report["source_trees"] = source_tree_report
         self._record_syncs(report, selected_sources)
         return imported, report
 
     def sync_t2_git(self, repo_dir="", repo_url=DEFAULT_T2_GIT_URL, branch=""):
-        repo_dir = os.path.abspath(repo_dir or os.path.join(os.getcwd(), "t2sde"))
+        repo_dir = os.path.abspath(repo_dir or _find_existing_dir("t2sde") or os.path.join(os.getcwd(), "t2sde"))
         manager = GitSourceManager()
         git_report = manager.sync_repo(repo_dir, repo_url=repo_url, branch=branch)
         imported, sync_report = self.sync_with_report(
@@ -338,6 +372,40 @@ def _load_name_list(path):
                 continue
             names.append(line)
     return names
+
+
+def _candidate_source_roots(cwd="", app_file=""):
+    cwd = os.path.abspath(cwd or os.getcwd())
+    app_file = app_file or __file__
+    project_root = os.path.abspath(os.path.join(os.path.dirname(app_file), "..", ".."))
+    roots = []
+    seen = set()
+    for start in (cwd, project_root):
+        current = start
+        while current not in seen:
+            roots.append(current)
+            seen.add(current)
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+    return roots
+
+
+def _find_existing_dir(*parts, **kwargs):
+    for base in _candidate_source_roots(**kwargs):
+        candidate = os.path.join(base, *parts)
+        if os.path.isdir(candidate):
+            return candidate
+    return ""
+
+
+def _find_existing_file(*parts, **kwargs):
+    for base in _candidate_source_roots(**kwargs):
+        candidate = os.path.join(base, *parts)
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
 
 
 def _override_key(package_name, source_origin=""):
