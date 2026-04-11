@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .git_source import DEFAULT_BLFS_GIT_URL, DEFAULT_JHALFS_GIT_URL, DEFAULT_T2_GIT_URL
+from .git_source import (
+    DEFAULT_BLFS_GIT_URL,
+    DEFAULT_JHALFS_GIT_URL,
+    DEFAULT_LFS_GIT_URL,
+    DEFAULT_T2_GIT_URL,
+)
 
 
 DEFAULT_SETTINGS = {
@@ -66,6 +71,57 @@ DEFAULT_SETTINGS = {
         "assume_lfs_base_installed": False,
         "use_jhalfs_tracking": False,
         "jhalfs_tracking_path": "/var/lib/jhalfs/BLFS/instpkg.xml",
+    },
+    "lfs_base": {
+        "enabled": False,
+        "init_system": "systemd",
+        "book_source": "git",
+        "book_git_url": DEFAULT_LFS_GIT_URL,
+        "book_commit": "13.0",
+        "local_book_path": "",
+        "build_root": "./lfs-build-root",
+        "source_archive_dir": "/sources",
+        "luser": "lfs",
+        "lgroup": "lfs",
+        "multilib": "default",
+        "build_method": "chroot",
+        "package_management": "none",
+        "testsuite": "none",
+        "jobs": 1,
+        "jobs_binutils_pass1": 1,
+        "keep_build_dirs": False,
+        "strip_binaries": False,
+        "remove_la_files": False,
+        "timezone": "GMT",
+        "lang": "C",
+        "full_locale": False,
+        "hostname": "lfs",
+        "interface": "eth0",
+        "ip_address": "10.0.2.9",
+        "gateway": "10.0.2.2",
+        "subnet_prefix": 24,
+        "broadcast": "10.0.2.255",
+        "domain": "local",
+        "nameserver1": "10.0.2.3",
+        "nameserver2": "8.8.8.8",
+        "console_font": "lat0-16",
+        "console_keymap": "us",
+        "clock_localtime": False,
+        "log_level": 4,
+        "use_custom_fstab": False,
+        "fstab_path": "",
+        "build_kernel": False,
+        "kernel_config": "",
+        "install_ncurses5": False,
+        "page_size": "A4",
+        "optimization_level": "off",
+        "create_sbu_report": True,
+        "save_ch5": False,
+        "target_vendor": "lfs",
+        "triplet_override": "",
+        "script_output_dir": "./generated-lfs-base",
+        "log_dir": "",
+        "execution_preview_seconds": 5,
     },
 }
 

@@ -73,6 +73,28 @@ class ScanReport:
 
 
 @dataclass
+class LfsBuildStep:
+    name: str
+    chapter: str
+    stage: str
+    order: int
+    script_path: str
+    relative_path: str = ""
+    description: str = ""
+
+
+@dataclass
+class LfsBuildPlan:
+    book_root: str
+    profiled_book: str
+    commands_root: str
+    target_triplet: str
+    source_entries: List[Dict[str, str]] = field(default_factory=list)
+    steps: List[LfsBuildStep] = field(default_factory=list)
+    stage_scripts: Dict[str, List[str]] = field(default_factory=dict)
+
+
+@dataclass
 class AppConfig:
     root: str
     db_path: str

@@ -7,6 +7,7 @@ import subprocess
 DEFAULT_T2_GIT_URL = "https://github.com/rxrbln/t2sde"
 DEFAULT_BLFS_GIT_URL = "https://github.com/lfs-book/blfs"
 DEFAULT_JHALFS_GIT_URL = "https://github.com/automate-lfs/jhalfs"
+DEFAULT_LFS_GIT_URL = "https://git.linuxfromscratch.org/lfs"
 
 
 class GitSourceManager:

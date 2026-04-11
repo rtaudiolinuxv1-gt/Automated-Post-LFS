@@ -20,6 +20,7 @@ from .git_source import (
     GitSourceManager,
 )
 from .jhalfs import read_instpkg_xml
+from .lfs_base import LfsBaseBuilder, LfsBaseExecutor
 from .scanner import RootScanner
 from .settings import deep_merge, merged_override, merged_settings
 from .simple_yaml import load_file
@@ -312,6 +313,73 @@ class PackageManagerApp:
             installed.update(read_instpkg_xml(self.config.root, tracking_path).keys())
         return sorted(installed)
 
+    def plan_lfs_base(self, progress_callback=None):
+        settings = self.get_settings()
+        builder = LfsBaseBuilder(self.config, settings.get("lfs_base", {}))
+        return builder.plan(progress_callback=progress_callback)
+
+    def export_lfs_base_scripts(self, plan=None, output_dir="", progress_callback=None):
+        settings = self.get_settings()
+        builder = LfsBaseBuilder(self.config, settings.get("lfs_base", {}))
+        plan = plan or builder.plan(progress_callback=progress_callback)
+        return builder.export_scripts(plan, output_dir=output_dir)
+
+    def fetch_lfs_base_sources(self, plan=None, progress_callback=None):
+        settings = self.get_settings()
+        builder = LfsBaseBuilder(self.config, settings.get("lfs_base", {}))
+        plan = plan or builder.plan(progress_callback=progress_callback)
+        executor = LfsBaseExecutor(self.config, settings.get("lfs_base", {}), self.store)
+        return executor.fetch_sources(plan, progress_callback=progress_callback)
+
+    def run_lfs_base(
+        self,
+        plan=None,
+        progress_callback=None,
+        resume=True,
+        stop_after_stage="",
+        fetch_sources=False,
+        dry_run=False,
+        root_approval_callback=None,
+        execution_notice_callback=None,
+    ):
+        settings = self.get_settings()
+        builder = LfsBaseBuilder(self.config, settings.get("lfs_base", {}))
+        plan = plan or builder.plan(progress_callback=progress_callback)
+        executor = LfsBaseExecutor(
+            self.config,
+            settings.get("lfs_base", {}),
+            self.store,
+            root_approval_callback=root_approval_callback,
+            execution_notice_callback=execution_notice_callback,
+        )
+        return executor.execute(
+            plan,
+            progress_callback=progress_callback,
+            resume=resume,
+            stop_after_stage=stop_after_stage,
+            fetch_sources=fetch_sources,
+            dry_run=dry_run,
+        )
+
+    def get_lfs_base_state(self):
+        return self.store.get_lfs_base_state()
+
+    def clear_lfs_base_state(self):
+        self.store.clear_lfs_base_state()
+
+    def get_lfs_base_log_tail(self, lines=200):
+        state = self.get_lfs_base_state()
+        path = (
+            state.get("current_log")
+            or state.get("last_log")
+            or state.get("fetch_log")
+            or state.get("master_log")
+            or ""
+        )
+        if not path:
+            return {"path": "", "lines": []}
+        return {"path": path, "lines": _read_tail(path, lines)}
+
     def load_recipe_file(self, path):
         return load_file(path)
 
@@ -434,6 +502,14 @@ def _emit_progress(progress_callback, phase="", source="", message="", current=N
         if total:
             event["percent"] = int((float(current or 0) / float(total)) * 100)
     progress_callback(event)
+
+
+def _read_tail(path, lines=200):
+    if not path or not os.path.isfile(path):
+        return []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        data = handle.readlines()
+    return [line.rstrip("\n") for line in data[-max(1, lines) :]]
 
 
 def _candidate_source_roots(cwd="", app_file=""):

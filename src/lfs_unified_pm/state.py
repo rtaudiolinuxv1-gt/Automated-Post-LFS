@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime
 
 from .models import InstalledRecord, PackageRecord
@@ -12,90 +13,104 @@ from .settings import DEFAULT_SETTINGS, merged_override, merged_settings
 class StateStore:
     def __init__(self, db_path):
         self.db_path = db_path
-        self.connection = sqlite3.connect(db_path)
+        self.connection = sqlite3.connect(db_path, timeout=30.0)
         self.connection.row_factory = sqlite3.Row
+        self.connection.execute("pragma busy_timeout = 30000")
         self._init_schema()
 
     def _init_schema(self):
-        self.connection.executescript(
-            """
-            create table if not exists packages (
-                name text not null,
-                version text not null,
-                source_origin text not null,
-                summary text default '',
-                category text default '',
-                description text default '',
-                homepage text default '',
-                build_system text default '',
-                recipe_format text default '',
-                depends_json text default '[]',
-                recommends_json text default '[]',
-                optional_json text default '[]',
-                provides_json text default '[]',
-                conflicts_json text default '[]',
-                sources_json text default '[]',
-                phases_json text default '{}',
-                metadata_json text default '{}',
-                updated_at text not null,
-                primary key (name, source_origin)
-            );
+        for attempt in range(6):
+            try:
+                self.connection.executescript(
+                    """
+                    create table if not exists packages (
+                        name text not null,
+                        version text not null,
+                        source_origin text not null,
+                        summary text default '',
+                        category text default '',
+                        description text default '',
+                        homepage text default '',
+                        build_system text default '',
+                        recipe_format text default '',
+                        depends_json text default '[]',
+                        recommends_json text default '[]',
+                        optional_json text default '[]',
+                        provides_json text default '[]',
+                        conflicts_json text default '[]',
+                        sources_json text default '[]',
+                        phases_json text default '{}',
+                        metadata_json text default '{}',
+                        updated_at text not null,
+                        primary key (name, source_origin)
+                    );
 
-            create table if not exists installed_packages (
-                name text primary key,
-                version text not null,
-                source_origin text not null,
-                install_reason text default '',
-                files_json text default '[]',
-                depends_json text default '[]',
-                metadata_json text default '{}',
-                installed_at text not null
-            );
+                    create table if not exists installed_packages (
+                        name text primary key,
+                        version text not null,
+                        source_origin text not null,
+                        install_reason text default '',
+                        files_json text default '[]',
+                        depends_json text default '[]',
+                        metadata_json text default '{}',
+                        installed_at text not null
+                    );
 
-            create table if not exists transactions (
-                id integer primary key autoincrement,
-                action text not null,
-                package_name text not null,
-                version text not null,
-                source_origin text not null,
-                status text not null,
-                detail text default '',
-                created_at text not null
-            );
+                    create table if not exists transactions (
+                        id integer primary key autoincrement,
+                        action text not null,
+                        package_name text not null,
+                        version text not null,
+                        source_origin text not null,
+                        status text not null,
+                        detail text default '',
+                        created_at text not null
+                    );
 
-            create table if not exists root_scans (
-                root text primary key,
-                scan_json text not null,
-                scanned_at text not null
-            );
+                    create table if not exists root_scans (
+                        root text primary key,
+                        scan_json text not null,
+                        scanned_at text not null
+                    );
 
-            create table if not exists settings (
-                key text primary key,
-                value_json text not null,
-                updated_at text not null
-            );
+                    create table if not exists settings (
+                        key text primary key,
+                        value_json text not null,
+                        updated_at text not null
+                    );
 
-            create table if not exists package_overrides (
-                package_name text primary key,
-                override_json text not null,
-                updated_at text not null
-            );
+                    create table if not exists package_overrides (
+                        package_name text primary key,
+                        override_json text not null,
+                        updated_at text not null
+                    );
 
-            create table if not exists source_syncs (
-                source text primary key,
-                synced_at text not null,
-                detail_json text not null
-            );
+                    create table if not exists source_syncs (
+                        source text primary key,
+                        synced_at text not null,
+                        detail_json text not null
+                    );
 
-            create table if not exists prefix_profiles (
-                prefix text primary key,
-                script_path text not null,
-                exports_json text not null,
-                created_at text not null
-            );
-            """
-        )
-        self.connection.commit()
+                    create table if not exists prefix_profiles (
+                        prefix text primary key,
+                        script_path text not null,
+                        exports_json text not null,
+                        created_at text not null
+                    );
+
+                    create table if not exists lfs_base_state (
+                        key text primary key,
+                        value_json text not null,
+                        updated_at text not null
+                    );
+                    """
+                )
+                self.connection.commit()
+                return
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error).lower() or attempt == 5:
+                    raise
+                time.sleep(1.0)
 
     def close(self):
         self.connection.close()
@@ -368,6 +383,29 @@ class StateStore:
             """,
             (prefix, script_path, json.dumps(exports, sort_keys=True), _now()),
         )
+        self.connection.commit()
+
+    def get_lfs_base_state(self, key="current"):
+        row = self.connection.execute(
+            "select value_json from lfs_base_state where key = ?",
+            (key,),
+        ).fetchone()
+        return json.loads(row["value_json"]) if row else {}
+
+    def save_lfs_base_state(self, value, key="current"):
+        self.connection.execute(
+            """
+            insert into lfs_base_state (key, value_json, updated_at) values (?, ?, ?)
+            on conflict(key) do update set
+                value_json=excluded.value_json,
+                updated_at=excluded.updated_at
+            """,
+            (key, json.dumps(value, sort_keys=True), _now()),
+        )
+        self.connection.commit()
+
+    def clear_lfs_base_state(self, key="current"):
+        self.connection.execute("delete from lfs_base_state where key = ?", (key,))
         self.connection.commit()
 
 

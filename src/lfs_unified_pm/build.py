@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 
 from .custom_builds import load_custom_build
+from .guarded_ops import GuardedOperationRunner
 from .jhalfs import read_instpkg_xml, write_instpkg_xml
 from .models import InstalledRecord, PackageRecord
 from .packaging import PackageExporter
@@ -14,12 +14,24 @@ from .source_fetch import fetch_sources_into
 
 
 class BuildExecutor:
-    def __init__(self, config, store, prompt_callback=None, command_review_callback=None):
+    def __init__(
+        self,
+        config,
+        store,
+        prompt_callback=None,
+        command_review_callback=None,
+        root_approval_callback=None,
+        execution_notice_callback=None,
+    ):
         self.config = config
         self.store = store
         self.exporter = PackageExporter(config.root, config.dist_dir)
         self.prompt_callback = prompt_callback
         self.command_review_callback = command_review_callback
+        self.guarded_ops = GuardedOperationRunner(
+            root_approval_callback=root_approval_callback,
+            execution_notice_callback=execution_notice_callback,
+        )
 
     def execute_plan(
         self,
@@ -74,10 +86,11 @@ class BuildExecutor:
                 ),
             )
             build_dir, staging_dir = self._work_paths(payload, build_mode, install_root)
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            shutil.rmtree(build_dir, ignore_errors=True)
-            os.makedirs(staging_dir, exist_ok=True)
-            os.makedirs(build_dir, exist_ok=True)
+            work_root = os.path.dirname(build_dir)
+            self.guarded_ops.remove_tree(staging_dir, target_root=work_root)
+            self.guarded_ops.remove_tree(build_dir, target_root=work_root)
+            self.guarded_ops.ensure_dir(staging_dir, target_root=work_root)
+            self.guarded_ops.ensure_dir(build_dir, target_root=work_root)
             effective_allow_la = allow_la_removal or policy["build"].get("allow_la_removal", False)
             phases = self._effective_phases(package.name, package.source_origin, package.phases)
             phases = self._review_commands(package, phases, policy)
@@ -158,13 +171,24 @@ class BuildExecutor:
             if cwd.startswith(install_root):
                 chroot_cwd = "/" + os.path.relpath(cwd, install_root)
             quoted = "cd %s && %s" % (chroot_cwd, command)
-            subprocess.run(
+            self.guarded_ops.run_command(
                 ["chroot", install_root, "/bin/bash", "-lc", quoted],
-                check=True,
                 env=env,
+                require_root=True,
+                context="chroot-build",
+                target_root=install_root,
+                location="chroot:%s%s" % (install_root, chroot_cwd if chroot_cwd.startswith("/") else "/" + chroot_cwd),
             )
             return
-        subprocess.run(["/bin/bash", "-lc", command], cwd=cwd, check=True, env=env)
+        self.guarded_ops.run_command(
+            ["/bin/bash", "-lc", command],
+            env=env,
+            require_root=False,
+            cwd=cwd,
+            context="native-build",
+            target_root=os.path.abspath(cwd),
+            location=os.path.abspath(cwd),
+        )
 
     def _install_image(self, staging_dir, install_root):
         files = []
@@ -173,8 +197,9 @@ class BuildExecutor:
                 source = os.path.join(root, name)
                 relative = os.path.relpath(source, staging_dir)
                 destination = os.path.join(install_root, relative)
-                os.makedirs(os.path.dirname(destination), exist_ok=True)
-                shutil.copy2(source, destination)
+                parent = os.path.dirname(destination)
+                self.guarded_ops.ensure_dir(parent, target_root=install_root)
+                self._copy_into_root(source, destination, install_root)
                 files.append("/" + relative)
         return sorted(files)
 
@@ -476,7 +501,7 @@ class BuildExecutor:
 
     def _write_profile_script(self, package_name, prefix, exports, install_root):
         profile_dir = os.path.join(install_root, "etc", "profile.d")
-        os.makedirs(profile_dir, exist_ok=True)
+        self.guarded_ops.ensure_dir(profile_dir, target_root=install_root)
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", package_name).strip("-") or "prefix"
         script_path = os.path.join(profile_dir, "%s.sh" % safe_name)
         lines = ["# generated for prefix %s" % prefix]
@@ -485,8 +510,21 @@ class BuildExecutor:
                 lines.append('case ":${%s:-}:" in *:"%s":*) ;; *) export %s="%s${%s:+:${%s}}" ;; esac' % (
                     variable, value, variable, value, variable, variable
                 ))
-        with open(script_path, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
+        content = "\n".join(lines) + "\n"
+        if _is_writable_parent(script_path):
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        else:
+            command = "cat > %s <<'EOF'\n%sEOF" % (_shell_quote(script_path), content)
+            self.guarded_ops.run_command(
+                ["/bin/bash", "-lc", command],
+                env={"LFS": install_root},
+                require_root=True,
+                context="native-install",
+                target_root=install_root,
+                location=script_path,
+                description="write profile script %s" % script_path,
+            )
         return script_path
 
     def _install_root(self, build_mode, chroot_root):
@@ -499,10 +537,24 @@ class BuildExecutor:
             work_root = os.path.join(install_root, "var", "cache", "lfs-pm", "work")
         else:
             work_root = self.config.work_dir
-        os.makedirs(work_root, exist_ok=True)
+        self.guarded_ops.ensure_dir(work_root, target_root=work_root)
         build_dir = os.path.join(work_root, "%s-%s-build" % (package.name, package.version))
         staging_dir = os.path.join(work_root, "%s-%s-image" % (package.name, package.version))
         return build_dir, staging_dir
+
+    def _copy_into_root(self, source, destination, install_root):
+        if _is_writable_parent(destination):
+            shutil.copy2(source, destination)
+            return
+        self.guarded_ops.run_command(
+            ["cp", "-a", source, destination],
+            env={"LFS": install_root},
+            require_root=True,
+            context="native-install",
+            target_root=install_root,
+            location=destination,
+            description="install %s" % os.path.basename(destination),
+        )
 
 
 def _join_path(prefix, child):
@@ -538,3 +590,17 @@ def _json_detail(**payload):
 
     filtered = {key: value for key, value in payload.items() if value not in ("", None, [], {})}
     return json.dumps(filtered, sort_keys=True) if filtered else ""
+
+
+def _is_writable_parent(path):
+    probe = path
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    return os.access(probe, os.W_OK)
+
+
+def _shell_quote(value):
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"

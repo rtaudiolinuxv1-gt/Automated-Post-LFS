@@ -3,10 +3,12 @@ from __future__ import annotations
 import curses
 import curses.textpad
 import json
+import time
 from datetime import datetime
 
 from .build import BuildExecutor
 from .build_scripts import BuildScriptExporter
+from .lfs_base import _resolve_lfs_build_root
 from .models import BuildPlan, BuildStep
 
 
@@ -54,6 +56,7 @@ def _main(screen, app):
         "package_by_key": {},
         "category_packages_cache": {},
         "dashboard_index": 0,
+        "lfs_base_plan": None,
     }
     _refresh_catalog(app, state)
     _maybe_prompt_for_sync(screen, app, state)
@@ -81,6 +84,7 @@ def _dashboard(screen, app, state):
         "System State",
         "Profile.d Settings",
         "Sync Databases",
+        "Build LFS Base",
         "Choose Packages",
         "Installed / History",
         "Build Queue",
@@ -150,16 +154,18 @@ def _dashboard(screen, app, state):
                 state["message"] = _sync_menu(screen, app)
                 _refresh_catalog(app, state)
             elif index == 4:
-                state["message"] = _browse_categories(screen, app, state)
+                state["message"] = _lfs_base_menu(screen, app, state)
             elif index == 5:
-                state["message"] = _installed_history(screen, app, state)
+                state["message"] = _browse_categories(screen, app, state)
             elif index == 6:
-                state["message"] = _build_queue(screen, app, state)
+                state["message"] = _installed_history(screen, app, state)
             elif index == 7:
-                state["message"] = _save_queue_scripts(screen, app, state)
+                state["message"] = _build_queue(screen, app, state)
             elif index == 8:
-                state["message"] = _browse_catalog(screen, app, state)
+                state["message"] = _save_queue_scripts(screen, app, state)
             elif index == 9:
+                state["message"] = _browse_catalog(screen, app, state)
+            elif index == 10:
                 return "quit"
 
 
@@ -255,6 +261,410 @@ def _sync_menu(screen, app):
                         return _sync_summary(report, selected)
                     except Exception as error:
                         message = "Sync failed: %s" % error
+
+
+def _lfs_base_menu(screen, app, state):
+    options = [
+        "LFS Base Settings",
+        "Generate Chapter Plan",
+        "Fetch LFS Sources",
+        "Dry Run LFS Base",
+        "Run LFS Base",
+        "LFS Build Status",
+        "View Current Log",
+        "Export LFS Base Scripts",
+        "View Current Plan",
+        "Reset LFS Build State",
+        "Back",
+    ]
+    index = 0
+    message = ""
+    while True:
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, state, "Queue Plan")
+        settings = app.get_settings()["lfs_base"]
+        plan = state.get("lfs_base_plan")
+        build_root = _resolve_lfs_build_root(app.config, settings)
+        lines = [
+            "LFS Base Builder",
+            "init: %s  book: %s  commit: %s" % (
+                settings.get("init_system", "systemd"),
+                settings.get("book_source", "git"),
+                settings.get("book_commit", "13.0"),
+            ),
+            "build root: %s" % build_root,
+            "target triplet: %s" % _format_lfs_target_triplet(settings),
+            "current plan: %s" % ("%d step(s)" % len(plan.steps) if plan else "not generated"),
+            message or "Enter select  q back",
+        ]
+        for row, line in enumerate(lines):
+            screen.addnstr(start_y + row, start_x, line, content_width - 1, _attr("title") if row == 0 else _attr("normal"))
+        option_start = start_y + 7
+        for row, option in enumerate(options, start=option_start):
+            current = row - option_start
+            screen.addnstr(
+                row,
+                start_x,
+                option,
+                content_width - 1,
+                _attr("selected") if current == index else _attr("normal"),
+            )
+        key, repeat = _read_key(screen)
+        if key in (ord("q"), 27):
+            return "Closed LFS base builder"
+        if key in (curses.KEY_DOWN, ord("j")) and index < len(options) - 1:
+            index = min(len(options) - 1, index + repeat)
+        elif key in (curses.KEY_UP, ord("k")) and index > 0:
+            index = max(0, index - repeat)
+        elif key in (10, 13):
+            if index == 0:
+                message = _edit_lfs_base_settings(screen, app)
+            elif index == 1:
+                try:
+                    plan = _run_lfs_base_plan(screen, app)
+                    state["lfs_base_plan"] = plan
+                    message = "Generated LFS base plan with %d step(s)" % len(plan.steps)
+                except Exception as error:
+                    message = "LFS plan failed: %s" % error
+            elif index == 2:
+                try:
+                    plan = state.get("lfs_base_plan") or _run_lfs_base_plan(screen, app)
+                    state["lfs_base_plan"] = plan
+                    target_dir = _run_lfs_base_fetch(screen, app, plan)
+                    message = "Fetched %d LFS source file(s) into %s" % (len(plan.source_entries), target_dir)
+                except Exception as error:
+                    message = "LFS source fetch failed: %s" % error
+            elif index == 3:
+                try:
+                    plan = state.get("lfs_base_plan") or _run_lfs_base_plan(screen, app)
+                    state["lfs_base_plan"] = plan
+                    previewed = _run_lfs_base_execute(screen, app, plan, dry_run=True)
+                    message = "Previewed %d LFS step(s)" % len(previewed)
+                except Exception as error:
+                    message = "LFS dry run failed: %s" % error
+            elif index == 4:
+                try:
+                    plan = state.get("lfs_base_plan") or _run_lfs_base_plan(screen, app)
+                    state["lfs_base_plan"] = plan
+                    executed = _run_lfs_base_execute(screen, app, plan)
+                    message = "Executed %d LFS step(s)" % len(executed)
+                except Exception as error:
+                    message = "LFS execution failed: %s" % error
+            elif index == 5:
+                message = _view_lfs_base_status(screen, app)
+            elif index == 6:
+                message = _view_lfs_base_log(screen, app)
+            elif index == 7:
+                try:
+                    plan = state.get("lfs_base_plan") or _run_lfs_base_plan(screen, app)
+                    state["lfs_base_plan"] = plan
+                    output_dir = app.export_lfs_base_scripts(plan=plan)
+                    message = "Exported LFS base scripts to %s" % output_dir
+                except Exception as error:
+                    message = "LFS export failed: %s" % error
+            elif index == 8:
+                plan = state.get("lfs_base_plan")
+                if not plan:
+                    message = "No LFS base plan generated yet"
+                else:
+                    message = _view_lfs_base_plan(screen, plan)
+            elif index == 9:
+                app.clear_lfs_base_state()
+                message = "Reset LFS base build state"
+            else:
+                return message or "Closed LFS base builder"
+
+
+def _run_lfs_base_plan(screen, app):
+    progress = {
+        "source": "lfs-base",
+        "phase": "start",
+        "message": "Preparing LFS base plan",
+        "tick": 0,
+    }
+
+    def callback(event):
+        progress.update(event)
+        progress["tick"] = progress.get("tick", 0) + 1
+        _draw_sync_progress(screen, {"lfs-base"}, progress, title="Generating LFS Base Plan")
+
+    _draw_sync_progress(screen, {"lfs-base"}, progress, title="Generating LFS Base Plan")
+    return app.plan_lfs_base(progress_callback=callback)
+
+
+def _run_lfs_base_fetch(screen, app, plan):
+    progress = {
+        "source": "lfs-base",
+        "phase": "fetch",
+        "message": "Fetching LFS sources",
+        "tick": 0,
+    }
+
+    def callback(event):
+        progress.update(event)
+        progress["tick"] = progress.get("tick", 0) + 1
+        _draw_sync_progress(screen, {"lfs-base"}, progress, title="Fetching LFS Sources")
+
+    _draw_sync_progress(screen, {"lfs-base"}, progress, title="Fetching LFS Sources")
+    return app.fetch_lfs_base_sources(plan=plan, progress_callback=callback)
+
+
+def _run_lfs_base_execute(screen, app, plan, dry_run=False):
+    progress = {
+        "source": "lfs-base",
+        "phase": "dry-run" if dry_run else "execute",
+        "message": "Previewing LFS base build" if dry_run else "Executing LFS base build",
+        "tick": 0,
+    }
+
+    def callback(event):
+        progress.update(event)
+        progress["tick"] = progress.get("tick", 0) + 1
+        _draw_sync_progress(screen, {"lfs-base"}, progress, title="Dry Run LFS Base" if dry_run else "Running LFS Base Build")
+
+    _draw_sync_progress(screen, {"lfs-base"}, progress, title="Dry Run LFS Base" if dry_run else "Running LFS Base Build")
+    return app.run_lfs_base(
+        plan=plan,
+        progress_callback=callback,
+        resume=True,
+        fetch_sources=False,
+        dry_run=dry_run,
+        root_approval_callback=lambda payload: _approve_root_action(screen, payload),
+        execution_notice_callback=lambda payload: _preview_lfs_execution(screen, payload, app.get_settings().get("lfs_base", {}).get("execution_preview_seconds", 5)),
+    )
+
+
+def _edit_lfs_base_settings(screen, app):
+    settings = app.get_settings()
+    lfs_base = dict(settings["lfs_base"])
+    rows = [
+        ("init_system", "Init System", "choice:systemd,sysv"),
+        ("book_source", "Book Source", "choice:git,local"),
+        ("book_git_url", "Book Git URL", "text"),
+        ("book_commit", "Book Commit", "text"),
+        ("local_book_path", "Local Book Path", "text"),
+        ("build_root", "Build Root", "text"),
+        ("source_archive_dir", "Source Archive Dir", "text"),
+        ("luser", "Temp User", "text"),
+        ("lgroup", "Temp Group", "text"),
+        ("multilib", "Multilib", "choice:default,ml_32,ml_x32,ml_all"),
+        ("build_method", "Build Method", "choice:chroot,boot"),
+        ("package_management", "Package Management", "choice:none,build-pack,wrap-install"),
+        ("testsuite", "Testsuite", "choice:none,critical,all"),
+        ("jobs", "Jobs", "int"),
+        ("jobs_binutils_pass1", "Binutils Pass1 Jobs", "int"),
+        ("keep_build_dirs", "Keep Build Dirs", "bool"),
+        ("strip_binaries", "Strip Binaries", "bool"),
+        ("remove_la_files", "Remove .la Files", "bool"),
+        ("target_vendor", "Target Vendor", "text"),
+        ("triplet_override", "Triplet Override", "text"),
+        ("log_dir", "Log Dir", "text"),
+        ("execution_preview_seconds", "Preview Seconds", "int"),
+        ("timezone", "Timezone", "text"),
+        ("lang", "Language", "text"),
+        ("hostname", "Hostname", "text"),
+        ("interface", "Interface", "text"),
+        ("ip_address", "IP Address", "text"),
+        ("gateway", "Gateway", "text"),
+        ("subnet_prefix", "Subnet Prefix", "int"),
+        ("broadcast", "Broadcast", "text"),
+        ("domain", "Domain", "text"),
+        ("nameserver1", "Nameserver 1", "text"),
+        ("nameserver2", "Nameserver 2", "text"),
+        ("console_font", "Console Font", "text"),
+        ("console_keymap", "Console Keymap", "text"),
+        ("clock_localtime", "Clock Localtime", "bool"),
+        ("log_level", "Log Level", "int"),
+        ("use_custom_fstab", "Use Custom Fstab", "bool"),
+        ("fstab_path", "Fstab Path", "text"),
+        ("build_kernel", "Build Kernel", "bool"),
+        ("kernel_config", "Kernel Config", "text"),
+        ("install_ncurses5", "Install Ncurses5", "bool"),
+        ("page_size", "Page Size", "choice:A4,letter"),
+        ("optimization_level", "Optimization", "choice:off,final,all"),
+        ("create_sbu_report", "Create SBU Report", "bool"),
+        ("save_ch5", "Save Chapter 5", "bool"),
+        ("script_output_dir", "Script Output Dir", "text"),
+    ]
+    index = 0
+    while True:
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+        screen.addnstr(start_y + 0, start_x, "LFS Base Settings", content_width - 1, _attr("title"))
+        screen.addnstr(start_y + 1, start_x, "Enter edit/toggle  s save  q back", content_width - 1, _attr("normal"))
+        first_row = start_y + 3
+        visible_count = max(1, (start_y + content_height) - first_row)
+        start = max(0, index - visible_count + 1)
+        for row_no, (field, label, kind) in enumerate(rows[start : start + visible_count], start=first_row):
+            current = start + row_no - first_row
+            value = _format_lfs_setting_value(lfs_base.get(field), kind)
+            screen.addnstr(
+                row_no,
+                start_x,
+                "%-24s %s" % (label[:24], value),
+                content_width - 1,
+                _attr("selected") if current == index else _attr("normal"),
+            )
+        key, repeat = _read_key(screen)
+        if key in (ord("q"), 27):
+            return "LFS base settings unchanged"
+        if key in (curses.KEY_DOWN, ord("j")) and index < len(rows) - 1:
+            index = min(len(rows) - 1, index + repeat)
+        elif key in (curses.KEY_UP, ord("k")) and index > 0:
+            index = max(0, index - repeat)
+        elif key == ord("s"):
+            app.update_settings({"lfs_base": lfs_base})
+            return "Saved LFS base settings"
+        elif key in (10, 13, ord(" ")):
+            field, label, kind = rows[index]
+            if kind == "bool":
+                lfs_base[field] = not bool(lfs_base.get(field))
+            elif kind == "int":
+                current = str(lfs_base.get(field, 0))
+                value = _prompt(screen, label, current)
+                if value:
+                    lfs_base[field] = int(value)
+            elif kind.startswith("choice:"):
+                choices = tuple(kind.split(":", 1)[1].split(","))
+                lfs_base[field] = _next_choice(choices, lfs_base.get(field))
+            else:
+                current = str(lfs_base.get(field, "") or "")
+                value = _prompt(screen, label, current)
+                if value is not None:
+                    lfs_base[field] = value.strip()
+
+
+def _view_lfs_base_plan(screen, plan):
+    index = 0
+    while True:
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+        screen.addnstr(start_y + 0, start_x, "LFS Base Plan", content_width - 1, _attr("title"))
+        screen.addnstr(start_y + 1, start_x, "q back", content_width - 1, _attr("normal"))
+        screen.addnstr(start_y + 2, start_x, "Triplet: %s" % plan.target_triplet, content_width - 1, _attr("accent"))
+        first_row = start_y + 4
+        visible_count = max(1, (start_y + content_height) - first_row)
+        start = max(0, index - visible_count + 1)
+        visible = plan.steps[start : start + visible_count]
+        for row_no, step in enumerate(visible, start=first_row):
+            current = start + row_no - first_row
+            line = "%03d %-10s %-16s %s" % (step.order, step.chapter[:10], step.stage[:16], step.name[: max(1, content_width - 36)])
+            screen.addnstr(row_no, start_x, line, content_width - 1, _attr("selected") if current == index else _attr("normal"))
+        key, repeat = _read_key(screen)
+        if key in (ord("q"), 27):
+            return "Closed LFS base plan"
+        if key in (curses.KEY_DOWN, ord("j")) and index < len(plan.steps) - 1:
+            index = min(len(plan.steps) - 1, index + repeat)
+        elif key in (curses.KEY_UP, ord("k")) and index > 0:
+            index = max(0, index - repeat)
+
+
+def _view_lfs_base_status(screen, app):
+    while True:
+        state = app.get_lfs_base_state()
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+        screen.addnstr(start_y + 0, start_x, "LFS Base Build Status", content_width - 1, _attr("title"))
+        screen.addnstr(start_y + 1, start_x, "q back", content_width - 1, _attr("normal"))
+        lines = [
+            "Build root: %s" % (state.get("build_root") or "-"),
+            "Target triplet: %s" % (state.get("target_triplet") or "-"),
+            "Completed steps: %s/%s" % (len(state.get("completed_steps", [])), state.get("plan_steps", 0)),
+            "Last order: %s" % (state.get("last_order", 0)),
+            "Last step: %s" % (state.get("last_step") or "-"),
+            "Current log: %s" % (state.get("current_log") or "-"),
+            "Master log: %s" % (state.get("master_log") or "-"),
+            "Sources fetched: %s" % ("yes" if state.get("sources_fetched", False) else "no"),
+            "Complete: %s" % ("yes" if state.get("complete", False) else "no"),
+        ]
+        for note in state.get("preflight", {}).get("notes", [])[: min(4, max(0, content_height - len(lines) - 6))]:
+            lines.append("Preflight: %s" % note)
+        for row_no, line in enumerate(lines, start=start_y + 3):
+            screen.addnstr(row_no, start_x, line, content_width - 1, _attr("normal"))
+        key, _ = _read_key(screen)
+        if key in (ord("q"), 27):
+            return "Closed LFS base build status"
+
+
+def _view_lfs_base_log(screen, app):
+    while True:
+        payload = app.get_lfs_base_log_tail(lines=200)
+        path = payload.get("path", "")
+        lines = payload.get("lines", [])
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+        screen.addnstr(start_y + 0, start_x, "LFS Build Log", content_width - 1, _attr("title"))
+        screen.addnstr(start_y + 1, start_x, "r refresh  q back", content_width - 1, _attr("normal"))
+        screen.addnstr(start_y + 2, start_x, path or "No log available yet", content_width - 1, _attr("accent"))
+        first_row = start_y + 4
+        visible_count = max(1, (start_y + content_height) - first_row)
+        visible = lines[-visible_count:]
+        for row_no, line in enumerate(visible, start=first_row):
+            screen.addnstr(row_no, start_x, line, content_width - 1, _attr("normal"))
+        key, _ = _read_key(screen)
+        if key in (ord("q"), 27):
+            return "Closed LFS build log"
+        if key in (ord("r"),):
+            continue
+
+
+def _approve_root_action(screen, payload):
+    while True:
+        _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+        screen.addnstr(start_y + 0, start_x, "Approve Root Action", content_width - 1, _attr("title"))
+        screen.addnstr(start_y + 1, start_x, "y approve  n decline", content_width - 1, _attr("normal"))
+        rows = [
+            "Action: %s" % (payload.get("description") or "root action"),
+            "Command:",
+            payload.get("command_text", ""),
+        ]
+        env = payload.get("env", {})
+        if env:
+            rows.append("Env: " + " ".join("%s=%s" % (key, env[key]) for key in sorted(env)))
+        visible = rows[: max(1, content_height - 1)]
+        for idx, line in enumerate(visible, start=start_y + 3):
+            screen.addnstr(idx, start_x, line, content_width - 1, _attr("accent") if idx == start_y + 3 else _attr("normal"))
+        key, _ = _read_key(screen)
+        if key in (ord("y"), ord("Y")):
+            return True
+        if key in (ord("n"), ord("N"), 27):
+            return False
+
+
+def _preview_lfs_execution(screen, payload, seconds=5):
+    countdown = max(0, int(seconds or 0))
+    deadline = time.time() + countdown
+    previous_timeout = screen.timeout(200)
+    try:
+        while True:
+            remaining = max(0, int(round(deadline - time.time()))) if countdown else 0
+            _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
+            screen.addnstr(start_y + 0, start_x, "About To Execute", content_width - 1, _attr("title"))
+            screen.addnstr(
+                start_y + 1,
+                start_x,
+                "Enter start now  q cancel%s" % ("  auto in %ds" % remaining if countdown else ""),
+                content_width - 1,
+                _attr("normal"),
+            )
+            rows = [
+                "Step: %s" % (payload.get("description") or "LFS command"),
+                "Context: %s" % (payload.get("context") or "host"),
+                "Target Root: %s" % (payload.get("target_root") or ""),
+                "Location: %s" % (payload.get("location") or ""),
+                "Command:",
+                payload.get("command_text", ""),
+            ]
+            env = payload.get("env", {})
+            if env:
+                rows.append("Env: " + " ".join("%s=%s" % (key, env[key]) for key in sorted(env)))
+            visible = rows[: max(1, content_height - 2)]
+            for idx, line in enumerate(visible, start=start_y + 3):
+                screen.addnstr(idx, start_x, line, content_width - 1, _attr("accent") if idx == start_y + 3 else _attr("normal"))
+            key = screen.getch()
+            if key in (10, 13, ord("y"), ord("Y")):
+                return True
+            if key in (ord("q"), ord("n"), ord("N"), 27):
+                return False
+            if countdown and time.time() >= deadline:
+                return True
+    finally:
+        screen.timeout(previous_timeout if previous_timeout is not None else -1)
 
 
 def _browse_categories(screen, app, state):
@@ -1332,7 +1742,18 @@ def _source_name(key):
         "t2": "t2",
         "arch": "arch",
         "custom": "custom",
-    }[key]
+    }.get(key, key)
+
+
+def _friendly_source_name(key):
+    return {
+        "base": "lfs-base",
+        "lfs-base": "lfs-base",
+        "blfs": "blfs",
+        "t2": "t2",
+        "arch": "arch",
+        "custom": "custom",
+    }.get(key, key)
 
 
 def _format_sync_time(value):
@@ -1388,10 +1809,9 @@ def _run_sync_with_progress(screen, app, selected):
     return app.sync_selected_sources(selected, progress_callback=callback)
 
 
-def _draw_sync_progress(screen, selected, progress):
+def _draw_sync_progress(screen, selected, progress, title="Syncing Package Databases"):
     _, _, start_y, start_x, content_height, content_width = _draw_layout(screen, {"queue": []}, "Queue Plan")
-    title = "Syncing Package Databases"
-    selected_line = "Sources: %s" % (", ".join(_source_name(key) for key in sorted(selected)) or "none")
+    selected_line = "Sources: %s" % (", ".join(_friendly_source_name(key) for key in sorted(selected)) or "none")
     source = progress.get("source", "") or "sync"
     message = progress.get("message", "") or progress.get("phase", "working")
     current = progress.get("current")
@@ -1650,6 +2070,27 @@ def _format_setting_value(value, kind):
     if kind == "csv":
         return ", ".join(value or []) or "-"
     return str(value) if value not in ("", None) else "-"
+
+
+def _format_lfs_setting_value(value, kind):
+    if kind == "bool":
+        return "yes" if value else "no"
+    return str(value) if value not in ("", None) else "-"
+
+
+def _next_choice(options, current):
+    if current not in options:
+        return options[0]
+    index = options.index(current)
+    return options[(index + 1) % len(options)]
+
+
+def _format_lfs_target_triplet(settings):
+    override = (settings.get("triplet_override", "") or "").strip()
+    if override:
+        return override
+    vendor = (settings.get("target_vendor", "lfs") or "lfs").strip()
+    return "$(uname -m)-%s-linux-gnu" % vendor
 
 
 def _default_dependency_level(settings, package):

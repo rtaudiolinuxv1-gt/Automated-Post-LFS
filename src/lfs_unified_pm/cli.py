@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+import time
 
 from .app import PackageManagerApp
 from .build import BuildExecutor
 from .build_scripts import BuildScriptExporter
 from .git_source import DEFAULT_T2_GIT_URL
+from .lfs_base import LfsExecutionDeclined
 from .tui import run_tui
 
 
@@ -65,18 +68,48 @@ def build_parser():
 
     verify = subparsers.add_parser("verify", help="verify installed files exist")
 
+    subparsers.add_parser("plan-lfs-base", help="generate a chapter-ordered LFS base build plan")
+    subparsers.add_parser("fetch-lfs-base-sources", help="download and stage LFS base sources")
+    export_lfs = subparsers.add_parser("export-lfs-base", help="export generated LFS base build scripts")
+    export_lfs.add_argument("--output-dir", default="")
+    run_lfs = subparsers.add_parser("run-lfs-base", help="run the generated LFS base build in order")
+    run_lfs.add_argument("--no-resume", action="store_true")
+    run_lfs.add_argument("--fetch-sources", action="store_true")
+    run_lfs.add_argument("--dry-run", action="store_true")
+    run_lfs.add_argument("--stop-after-stage", default="")
+    run_lfs.add_argument("--yes-root-actions", action="store_true")
+    run_lfs.add_argument("--preview-seconds", type=int, default=None)
+    subparsers.add_parser("lfs-base-status", help="show current LFS base build status")
+    lfs_log = subparsers.add_parser("lfs-base-log", help="show the tail of the current LFS base log")
+    lfs_log.add_argument("--lines", type=int, default=100)
+    subparsers.add_parser("reset-lfs-base-state", help="clear saved LFS base build progress")
+
     subparsers.add_parser("tui", help="run the curses package browser")
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args(argv)
-    app = PackageManagerApp(args.root)
     try:
-        return _dispatch(app, args)
-    finally:
-        app.close()
+        args = parser.parse_args(argv)
+        app = PackageManagerApp(args.root)
+        try:
+            return _dispatch(app, args)
+        finally:
+            app.close()
+    except KeyboardInterrupt:
+        print("Cancelled.", file=sys.stderr)
+        return 130
+    except LfsExecutionDeclined as error:
+        print(str(error), file=sys.stderr)
+        return 130
+    except subprocess.CalledProcessError as error:
+        command = " ".join(str(part) for part in error.cmd) if getattr(error, "cmd", None) else "<unknown>"
+        print("Error: command failed with exit status %s: %s" % (error.returncode, command), file=sys.stderr)
+        return 1
+    except (RuntimeError, FileNotFoundError, PermissionError, OSError, ValueError) as error:
+        print("Error: %s" % error, file=sys.stderr)
+        return 1
 
 
 def _dispatch(app, args):
@@ -238,6 +271,96 @@ def _dispatch(app, args):
             print("%s missing %s" % (name, path))
         return 1 if missing else 0
 
+    if args.command == "plan-lfs-base":
+        progress_callback = _make_cli_progress_callback()
+        try:
+            plan = app.plan_lfs_base(progress_callback=progress_callback)
+        finally:
+            _finish_cli_progress(progress_callback)
+        print("LFS base plan: %d step(s)" % len(plan.steps))
+        print("Book root: %s" % plan.book_root)
+        print("Target triplet: %s" % plan.target_triplet)
+        for step in plan.steps:
+            print("%03d %-18s %-16s %s" % (step.order, step.chapter, step.stage, step.relative_path))
+        return 0
+
+    if args.command == "export-lfs-base":
+        progress_callback = _make_cli_progress_callback()
+        try:
+            plan = app.plan_lfs_base(progress_callback=progress_callback)
+            output_dir = app.export_lfs_base_scripts(plan=plan, output_dir=args.output_dir)
+        finally:
+            _finish_cli_progress(progress_callback)
+        print("Exported LFS base scripts to %s" % output_dir)
+        print("Target triplet: %s" % plan.target_triplet)
+        return 0
+
+    if args.command == "fetch-lfs-base-sources":
+        progress_callback = _make_cli_progress_callback()
+        try:
+            plan = app.plan_lfs_base(progress_callback=progress_callback)
+            target_dir = app.fetch_lfs_base_sources(plan=plan, progress_callback=progress_callback)
+        finally:
+            _finish_cli_progress(progress_callback)
+        print("Fetched %d LFS source file(s) into %s" % (len(plan.source_entries), target_dir))
+        state = app.get_lfs_base_state()
+        if state.get("fetch_log"):
+            print("Fetch log: %s" % state["fetch_log"])
+        return 0
+
+    if args.command == "run-lfs-base":
+        progress_callback = _make_cli_progress_callback()
+        try:
+            plan = app.plan_lfs_base(progress_callback=progress_callback)
+            executed = app.run_lfs_base(
+                plan=plan,
+                progress_callback=progress_callback,
+                resume=not args.no_resume,
+                stop_after_stage=args.stop_after_stage,
+                fetch_sources=args.fetch_sources,
+                dry_run=args.dry_run,
+                root_approval_callback=None if args.yes_root_actions else _make_root_approval_callback(),
+                execution_notice_callback=_make_execution_notice_callback(
+                    seconds=(
+                        args.preview_seconds
+                        if args.preview_seconds is not None
+                        else app.get_settings().get("lfs_base", {}).get("execution_preview_seconds", 5)
+                    )
+                ),
+            )
+        finally:
+            _finish_cli_progress(progress_callback)
+        if args.dry_run:
+            print("Previewed %d LFS base step(s)" % len(executed))
+        else:
+            print("Executed %d LFS base step(s)" % len(executed))
+            state = app.get_lfs_base_state()
+            if state.get("master_log"):
+                print("Master log: %s" % state["master_log"])
+            if state.get("last_log"):
+                print("Last step log: %s" % state["last_log"])
+        for path in executed:
+            print(path)
+        return 0
+
+    if args.command == "lfs-base-status":
+        print(json.dumps(app.get_lfs_base_state(), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "lfs-base-log":
+        payload = app.get_lfs_base_log_tail(lines=args.lines)
+        path = payload.get("path", "")
+        if path:
+            print("Log: %s" % path)
+        for line in payload.get("lines", []):
+            print(line)
+        return 0
+
+    if args.command == "reset-lfs-base-state":
+        app.clear_lfs_base_state()
+        print("Cleared LFS base build state")
+        return 0
+
     if args.command == "tui":
         return run_tui(app)
 
@@ -262,6 +385,57 @@ def _print_plan(plan):
         if step.missing_optional:
             print("  missing optional: %s" % ", ".join(step.missing_optional))
     return 0
+
+
+def _make_root_approval_callback(stream=None):
+    stream = stream or sys.stderr
+
+    def callback(payload):
+        stream.write("\n")
+        stream.write("Root approval required\n")
+        if payload.get("description"):
+            stream.write("Action: %s\n" % payload["description"])
+        if payload.get("env"):
+            env_bits = " ".join("%s=%s" % (key, payload["env"][key]) for key in sorted(payload["env"]))
+            stream.write("Env: %s\n" % env_bits)
+        stream.write("Command:\n")
+        stream.write("  %s\n" % payload.get("command_text", ""))
+        answer = input("Execute this as root? [y/N]: ").strip().lower()
+        return answer in ("y", "yes")
+
+    return callback
+
+
+def _make_execution_notice_callback(stream=None, seconds=5):
+    stream = stream or sys.stderr
+    seconds = max(0, int(seconds or 0))
+
+    def callback(payload):
+        stream.write("\n")
+        stream.write("About to execute LFS step\n")
+        if payload.get("description"):
+            stream.write("Step: %s\n" % payload["description"])
+        stream.write("Context: %s\n" % (payload.get("context") or "host"))
+        if payload.get("target_root"):
+            stream.write("Target root: %s\n" % payload["target_root"])
+        if payload.get("location"):
+            stream.write("Location: %s\n" % payload["location"])
+        if payload.get("env"):
+            env_bits = " ".join("%s=%s" % (key, payload["env"][key]) for key in sorted(payload["env"]))
+            stream.write("Env: %s\n" % env_bits)
+        stream.write("Command:\n")
+        stream.write("  %s\n" % payload.get("command_text", ""))
+        if seconds > 0:
+            for remaining in range(seconds, 0, -1):
+                stream.write("Press Ctrl+C now to abort. Continuing in %ds...\r" % remaining)
+                stream.flush()
+                time.sleep(1)
+            stream.write(" " * 72 + "\r")
+        stream.write("\n")
+        stream.flush()
+        return True
+
+    return callback
 
 
 def _print_change_report(report):
