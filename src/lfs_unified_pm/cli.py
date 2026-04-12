@@ -399,7 +399,7 @@ def _make_root_approval_callback(stream=None):
             env_bits = " ".join("%s=%s" % (key, payload["env"][key]) for key in sorted(payload["env"]))
             stream.write("Env: %s\n" % env_bits)
         stream.write("Command:\n")
-        stream.write("  %s\n" % payload.get("command_text", ""))
+        stream.write("  %s\n" % _display_command_text(payload))
         answer = input("Execute this as root? [y/N]: ").strip().lower()
         return answer in ("y", "yes")
 
@@ -407,10 +407,12 @@ def _make_root_approval_callback(stream=None):
 
 
 def _make_execution_notice_callback(stream=None, seconds=5):
-    stream = stream or sys.stderr
+    stream = stream or sys.stdout
     seconds = max(0, int(seconds or 0))
 
     def callback(payload):
+        payload_seconds = payload.get("preview_seconds")
+        effective_seconds = seconds if payload_seconds is None else max(0, int(payload_seconds or 0))
         stream.write("\n")
         stream.write("About to execute LFS step\n")
         if payload.get("description"):
@@ -424,9 +426,9 @@ def _make_execution_notice_callback(stream=None, seconds=5):
             env_bits = " ".join("%s=%s" % (key, payload["env"][key]) for key in sorted(payload["env"]))
             stream.write("Env: %s\n" % env_bits)
         stream.write("Command:\n")
-        stream.write("  %s\n" % payload.get("command_text", ""))
-        if seconds > 0:
-            for remaining in range(seconds, 0, -1):
+        stream.write("  %s\n" % _display_command_text(payload))
+        if effective_seconds > 0:
+            for remaining in range(effective_seconds, 0, -1):
                 stream.write("Press Ctrl+C now to abort. Continuing in %ds...\r" % remaining)
                 stream.flush()
                 time.sleep(1)
@@ -436,6 +438,20 @@ def _make_execution_notice_callback(stream=None, seconds=5):
         return True
 
     return callback
+
+
+def _display_command_text(payload):
+    command_text = payload.get("command_text", "")
+    if _is_chroot_payload(payload):
+        target_root = payload.get("target_root", "") or "<unknown-chroot>"
+        return "[chroot %s] %s" % (target_root, command_text)
+    return command_text
+
+
+def _is_chroot_payload(payload):
+    context = (payload.get("context") or "").lower()
+    location = (payload.get("location") or "").lower()
+    return context.startswith("chroot") or context.endswith(":chroot-root") or location.startswith("chroot:")
 
 
 def _print_change_report(report):

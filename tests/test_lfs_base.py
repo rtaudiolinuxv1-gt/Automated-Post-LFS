@@ -11,6 +11,7 @@ from lfs_unified_pm.lfs_base import (
     LfsBaseBuilder,
     LfsBaseExecutor,
     _collect_steps,
+    _extract_preview_commands,
     _guarded_step_notice_payloads,
     _script_guard_context,
     _lint_step_script,
@@ -162,6 +163,35 @@ class LfsBaseTests(unittest.TestCase):
         self.assertIn('RTAL_LFS_REAL=$(readlink -m -- "$LFS")', data)
         self.assertIn('"$RTAL_LFS_REAL"|"$RTAL_LFS_REAL"/*', data)
         self.assertIn('step-markers', data)
+
+    def test_extract_preview_commands_includes_configure_and_make(self):
+        script_path = os.path.join(self.tempdir, "chapter05-script")
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/bin/bash\n"
+                "tar() {\n"
+                "  command tar \"$@\"\n"
+                "}\n"
+                "# Start of LFS book script\n"
+                "mkdir -v build\n"
+                "cd       build\n"
+                "../configure --prefix=$LFS/tools \\\n"
+                "             --target=$LFS_TGT\n"
+                "make\n"
+                "make -j1 install\n"
+                "# End of LFS book script\n"
+            )
+        commands = _extract_preview_commands(script_path)
+        self.assertEqual(
+            commands,
+            [
+                "mkdir -v build",
+                "cd build",
+                "../configure --prefix=$LFS/tools --target=$LFS_TGT",
+                "make",
+                "make -j1 install",
+            ],
+        )
 
     def test_script_guard_context_uses_chroot_for_chapter7_plus(self):
         self.assertEqual(_script_guard_context("chapter05/501-binutils-pass1"), "host")
@@ -488,9 +518,11 @@ class LfsBaseTests(unittest.TestCase):
         self.assertEqual(previewed, ["chapter04/401-demo"])
         self.assertEqual(self.store.get_lfs_base_state(), {})
         self.assertFalse(os.path.exists(os.path.join(self.root, "lfs-base")))
-        self.assertEqual(len(notices), 1)
+        self.assertEqual(len(notices), 2)
         self.assertEqual(notices[0]["description"], "chapter04/401-demo")
         self.assertEqual(notices[0]["target_root"], self.root)
+        self.assertEqual(notices[1]["description"], "chapter04/401-demo planned command")
+        self.assertEqual(notices[1]["command_text"], "echo demo-step")
 
     def test_sudo_command_forwards_lfs_environment(self):
         command = _sudo_command(["/tmp/demo-step"], {"LFS": "/mnt/test-lfs", "TERM": "xterm"})

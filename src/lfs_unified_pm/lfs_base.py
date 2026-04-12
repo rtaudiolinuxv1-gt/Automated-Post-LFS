@@ -1695,7 +1695,9 @@ def _step_notice_payloads(build_root, step, settings):
     special = _guarded_step_notice_payloads(build_root, step, settings)
     if special is not None:
         return special
-    return [_step_notice_payload(build_root, step)]
+    payloads = [_step_notice_payload(build_root, step)]
+    payloads.extend(_script_command_preview_payloads(build_root, step))
+    return payloads
 
 
 def _guarded_step_notice_payloads(build_root, step, settings):
@@ -1803,6 +1805,84 @@ def _guarded_notice_payload(command, env=None, context="", target_root="", descr
         description=description,
         location=location,
     )
+
+
+def _script_command_preview_payloads(build_root, step):
+    if _is_python_guarded_step(step.relative_path):
+        return []
+    commands = _extract_preview_commands(step.script_path)
+    if not commands:
+        return []
+    env = os.environ.copy()
+    env["LFS"] = build_root
+    context = "script-body:%s" % step.stage
+    location = os.path.join(build_root, "lfs-base", step.relative_path)
+    payloads = []
+    for command_text in commands:
+        payloads.append(
+            {
+                "description": "%s planned command" % step.relative_path,
+                "command": [command_text],
+                "command_text": command_text,
+                "context": context,
+                "target_root": build_root,
+                "location": location,
+                "env": {"LFS": build_root},
+                "preview_seconds": 0,
+            }
+        )
+    return payloads
+
+
+def _extract_preview_commands(script_path):
+    try:
+        with open(script_path, "r", encoding="utf-8", errors="ignore") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return []
+    body_start, body_end = _script_body_window(lines)
+    if body_start is not None:
+        lines = lines[body_start - 1 : body_end - 1 if body_end is not None else None]
+    commands = []
+    current = []
+    for raw_line in lines:
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        continuation = stripped.endswith("\\")
+        if continuation:
+            stripped = stripped[:-1].rstrip()
+        current.append(stripped)
+        if continuation:
+            continue
+        command_text = " ".join(part for part in current if part).strip()
+        command_text = " ".join(command_text.split())
+        current = []
+        if _skip_preview_command(command_text):
+            continue
+        commands.append(command_text)
+    if current:
+        command_text = " ".join(part for part in current if part).strip()
+        command_text = " ".join(command_text.split())
+        if command_text and not _skip_preview_command(command_text):
+            commands.append(command_text)
+    return commands
+
+
+def _skip_preview_command(command_text):
+    if not command_text:
+        return True
+    stripped = command_text.strip()
+    if stripped in ("then", "do", "done", "fi", "esac", "else", "{", "}"):
+        return True
+    if stripped.startswith(("if ", "for ", "while ", "case ", "elif ")):
+        return True
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", stripped):
+        return True
+    if stripped.startswith("export "):
+        return True
+    return False
 
 
 def _validated_lfs_env(env):

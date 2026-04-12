@@ -611,7 +611,7 @@ def _approve_root_action(screen, payload):
         rows = [
             "Action: %s" % (payload.get("description") or "root action"),
             "Command:",
-            payload.get("command_text", ""),
+            _display_command_text(payload),
         ]
         env = payload.get("env", {})
         if env:
@@ -648,7 +648,7 @@ def _preview_lfs_execution(screen, payload, seconds=5):
                 "Target Root: %s" % (payload.get("target_root") or ""),
                 "Location: %s" % (payload.get("location") or ""),
                 "Command:",
-                payload.get("command_text", ""),
+                _display_command_text(payload),
             ]
             env = payload.get("env", {})
             if env:
@@ -665,6 +665,20 @@ def _preview_lfs_execution(screen, payload, seconds=5):
                 return True
     finally:
         screen.timeout(previous_timeout if previous_timeout is not None else -1)
+
+
+def _display_command_text(payload):
+    command_text = payload.get("command_text", "")
+    if _is_chroot_payload(payload):
+        target_root = payload.get("target_root", "") or "<unknown-chroot>"
+        return "[chroot %s] %s" % (target_root, command_text)
+    return command_text
+
+
+def _is_chroot_payload(payload):
+    context = (payload.get("context") or "").lower()
+    location = (payload.get("location") or "").lower()
+    return context.startswith("chroot") or context.endswith(":chroot-root") or location.startswith("chroot:")
 
 
 def _browse_categories(screen, app, state):
